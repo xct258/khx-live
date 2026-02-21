@@ -16,14 +16,14 @@ RUN apt update \
     # 创建临时目录
     && mkdir -p /root/tmp \
     # 下载容器构建脚本
-    && wget -O /root/tmp/init-components.sh https://raw.githubusercontent.com/xct258/docker-bililive/main/容器构建脚本/init-components.sh \
+    && wget -O /root/tmp/init-components.sh https://raw.githubusercontent.com/xct258/khx-live/main/容器构建脚本/init-components.sh \
     && chmod +x /root/tmp/init-components.sh \
     # 执行容器构建脚本
     && /root/tmp/init-components.sh \
     # 清理临时目录
     && rm -rf /root/tmp \
     # 下载容器启动脚本
-    && wget -O /usr/local/bin/start.sh https://raw.githubusercontent.com/xct258/docker-bililive/main/容器构建脚本/start.sh \
+    && wget -O /usr/local/bin/start.sh https://raw.githubusercontent.com/xct258/khx-live/main/容器构建脚本/start.sh \
     # 赋予启动脚本执行权限
     && chmod +x /usr/local/bin/start.sh
 
