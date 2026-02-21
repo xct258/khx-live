@@ -13,7 +13,7 @@
    容器启动后会运行 `BililiveRecorder.Cli` 并绑定 `2356` 端口，通过 HTTP Basic 登录控制录制任务。录制文件存放在宿主机挂载的 `/rec/录播姬`。
 
 2. **biliup 上传与后处理**  
-   镜像内包含最新的 `biliup` 二进制，可在宿主 `/rec/biliup` 下运行，如需使用容器内脚本，可通过 `/opt/bililive/biliup` 中的助手程序。
+   镜像内包含最新的 `biliup` 二进制，用于执行上传功能。
 
 3. **视频处理脚本集合**  
    `/opt/bililive/scripts` 下存放了一套 FFmpeg 自动处理、封面获取、日志记录等实用 shell/python 脚本，镜像初始化时会同步到 `/rec/脚本`，方便用户自定义任务（例如上传/压制等）。
@@ -83,7 +83,6 @@
 | `Bililive_PASS`          | 录播姬 HTTP Basic 密码                          | 随机生成    | `S7f9kLm0`       |
 | `ENABLE_WEBCLIP`         | 是否启用在线切片 Web 应用                      | `false`     | `true`/`false`   |
 | `WEBCLIP_PORT`           | 在线切片监听端口                                | `8186`      | `8080`           |
-| `BILILIVE_ARGS`          | 额外传递给 `BililiveRecorder.Cli` 的命令行参数  | 空          | `--bind http://*:1234` |
 
 ---
 
