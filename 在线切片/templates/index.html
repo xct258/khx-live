@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>视频合并</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="/static/favicon.ico">
+
+    <!-- 内联默认强调色 -->
+</head>
+
+<body>
+
+    <!-- 加载层 -->
+    <div id="loadingOverlay" class="loading-overlay">加载中...</div>
+
+    <!-- 网站说明（全屏弹窗，启动后 2 秒显示；加载内容可在后台继续） -->
+    <div id="siteIntroOverlay" class="site-intro-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="site-intro-modal" role="document">
+            <div class="site-intro-header">
+                <div class="site-intro-title">使用说明</div>
+                <button id="siteIntroCloseX" class="modal-btn" type="button" aria-label="关闭">×</button>
+            </div>
+            <div class="site-intro-body">
+                <div style="opacity:0.9; font-size:13px; line-height:1.6;">
+                    <!-- 1. 工具简介 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📌 工具简介
+                    </div>
+                    <div style="margin:0 0 14px 10px;">
+                        这是一个专为括弧笑直播回放设计的<strong>视频合并工具</strong>，支持从多个视频中提取精彩片段并合并为一个完整视频，所有代码均使用AI生成，如有bug欢迎私信反馈。
+                    </div>
+                    <!-- 2. 快速上手 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🚀 快速上手
+                    </div>
+                    <ol style="margin:0 0 14px 18px; padding:0;">
+                        <li><strong>选择视频</strong>：首先需要选择视频文件</li>
+                        <li><strong>预览</strong>：点击"预览"按钮加载视频</li>
+                        <li><strong>标记片段</strong>：播放到目标位置后，使用 <code>Q</code> 设定起点，<code>W</code> 设定终点</li>
+                        <li><strong>添加片段</strong>：点击"确认添加片段"或按 <code>C</code></li>
+                        <li><strong>合并</strong>：重复上述步骤添加多个片段，最后输入用户名并点击"开始合并"</li>
+                    </ol>
+
+                    <!-- 3. 完整快捷键 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⌨️ 完整快捷键
+                    </div>
+                    <div style="margin:0 0 14px 10px;">
+                        <div style="display:grid; grid-template-columns: auto 1fr; gap:4px 12px; font-size:12px;">
+                            <strong>空格</strong><span>播放 / 暂停</span>
+                            <strong>← / →</strong><span>后退 / 前进 1 秒</span>
+                            <strong>Q</strong><span>设定片段起点</span>
+                            <strong>W</strong><span>设定片段终点</span>
+                            <strong>C</strong><span>确认添加当前片段</span>
+                            <strong>P</strong><span>预览当前选中的片段</span>
+                            <strong>[</strong><span>跳转到片段起点（方便微调）</span>
+                        </div>
+                    </div>
+
+                    <!-- 4. 高级功能 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">✨ 高级功能
+                    </div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>预览合并</strong>：在提交前预览所有片段的合并效果并调整顺序</li>
+                        <li><strong>历史输出</strong>：查看和管理之前生成的合并文件</li>
+                        <li><strong>B站投稿</strong>：直接将合并后的视频投稿到哔哩哔哩</li>
+                        <li><strong>多视频合并</strong>：可从不同视频中提取片段并合并为一个文件</li>
+                        <li><strong>进度实时显示</strong>：合并时显示实时进度和预计剩余时间</li>
+                    </ul>
+
+                    <!-- 5. 注意事项 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⚠️ 注意事项
+                    </div>
+                    <ul style="margin:0 0 8px 18px; padding:0; font-size:12px;">
+                        <li>同一时间只能运行一个合并任务</li>
+                        <li>片段列表和用户名会自动保存在浏览器中</li>
+                        <li>合并成功后当前片段列表会自动清空</li>
+                    </ul>
+                </div>
+
+            </div>
+            <div class="site-intro-actions" style="justify-content: space-between;">
+                <label class="site-intro-nomore">
+                    <input id="siteIntroNoMore" type="checkbox"> 下次不再提示
+                </label>
+                <button id="siteIntroOk" class="modal-btn modal-btn-primary" type="button">我知道了</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 容器 -->
+    <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Modal 弹窗 -->
+    <div id="modalOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="modal">
+            <div id="modalTitle" class="modal-header">提示</div>
+            <div id="modalMessage" class="modal-body"></div>
+            <div class="modal-actions">
+                <button id="modalCancel" class="modal-btn" type="button">取消</button>
+                <button id="modalOk" class="modal-btn modal-btn-primary" type="button">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 投稿 Modal 弹窗（不再在页面中展开表单） -->
+    <div id="uploadModalOverlay" class="modal-overlay upload-modal-overlay" role="dialog" aria-modal="true"
+        aria-hidden="true">
+        <div class="modal upload-modal">
+            <div class="modal-header"
+                style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                <span>投稿到B站</span>
+                <button id="uploadModalCloseX" class="modal-btn" type="button" aria-label="关闭">×</button>
+            </div>
+            <div class="modal-body upload-modal-body">
+                <div style="font-size:12px; opacity:0.85; margin-bottom:10px;">文件：<span id="uploadModalFile"
+                        style="font-family:monospace;"></span></div>
+
+                <label for="uploadModalTitle">视频标题：</label>
+                <input id="uploadModalTitle" type="text" placeholder="输入视频标题">
+
+                <label for="uploadModalDesc">视频简介：</label>
+                <input id="uploadModalDesc" type="text" placeholder="输入视频简介">
+
+                <div style="font-weight:700; margin-bottom:4px;">视频封面（可选）：</div>
+                <div class="cover-upload-wrapper">
+                    <input id="uploadModalCover" type="file" accept="image/*" style="display:none;">
+
+                    <!-- 初始状态：选择按钮 -->
+                    <button type="button" id="uploadModalCoverBtn" class="cover-upload-btn">
+                        <span class="icon">📷</span>
+                        <span class="text">选择封面图片</span>
+                    </button>
+
+                    <!-- 选中后状态：文件信息+预览按钮 -->
+                    <div id="uploadModalCoverInfo" class="cover-selected-info" style="display:none;">
+                        <span id="coverFileName" class="cover-filename">filename.png</span>
+                        <div class="cover-actions">
+                            <button type="button" id="coverRemoveBtn" class="cover-action-btn remove">×</button>
+                        </div>
+                    </div>
+                </div>
+
+                <label for="uploadModalTags">视频标签：</label>
+                <div id="uploadModalTagsEditor" class="bili-tags-editor" tabindex="0" aria-label="视频标签输入">
+                    <div id="uploadModalTagsChips" style="display:contents;"></div>
+                    <input id="uploadModalTags" class="bili-tags-input" type="text" placeholder="回车添加标签，支持空格/逗号"
+                        autocomplete="off" autocapitalize="off" spellcheck="false">
+                </div>
+                <div id="uploadModalTagsHint" class="bili-tags-hint">最多10个标签；回车/空格/逗号添加，退格删除最后一个。</div>
+
+                <div id="uploadModalHint" style="font-size:12px; opacity:0.85; margin-top:6px; display:none;"></div>
+                <div id="uploadModalResult" class="upload-modal-result" style="margin-top:10px;"></div>
+            </div>
+            <div class="modal-actions">
+                <button id="uploadModalCancel" class="modal-btn" type="button">关闭</button>
+                <button id="uploadModalStop" class="modal-btn" type="button"
+                    style="display:none; background:rgba(255, 100, 100, 0.18); border-color: rgba(255,120,120,0.22);">停止投稿</button>
+                <button id="uploadModalSubmit" class="modal-btn modal-btn-primary" type="button">投稿到B站</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 历史输出 Modal 弹窗 -->
+    <div id="historyModalOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="modal history-modal">
+            <div class="modal-header"
+                style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                <span id="historyModalTitle">历史输出</span>
+                <button id="historyModalCloseX" class="modal-btn" type="button" aria-label="关闭">×</button>
+            </div>
+            <div id="historyModalBody" class="modal-body history-modal-body"></div>
+            <div class="modal-actions">
+                <button id="historyModalClose" class="modal-btn" type="button">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 合并效果预览 Modal 弹窗 -->
+    <div id="mergePreviewOverlay" class="modal-overlay merge-preview-overlay" role="dialog" aria-modal="true"
+        aria-hidden="true">
+        <div class="modal merge-preview-modal">
+            <div class="modal-header"
+                style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                <span id="mergePreviewTitle">合并效果预览</span>
+                <button id="mergePreviewCloseX" class="modal-btn" type="button" aria-label="关闭">×</button>
+            </div>
+            <div class="modal-body merge-preview-body">
+                <div class="merge-preview-grid">
+                    <div class="merge-preview-left">
+                        <div id="mergePreviewNow" class="merge-preview-now"></div>
+                        <video id="mergePreviewPlayer" class="merge-preview-video" preload="metadata"
+                            playsinline></video>
+
+                        <!-- 合并预览自定义控制条（不使用原生 controls） -->
+                        <div class="video-controls merge-preview-controls">
+                            <div class="progress-row">
+                                <input type="range" id="mergePreviewProgress" value="0" min="0" step="0.01"
+                                    class="custom-range player-progress">
+                            </div>
+                            <div class="buttons-row">
+                                <div class="ctrl-group left">
+                                    <button id="mergePreviewPlayPause" class="icon-btn" type="button"
+                                        title="播放/暂停">播放</button>
+                                    <span id="mergePreviewTime" class="time-text">00:00:00 / 00:00:00</span>
+                                </div>
+                                <div class="ctrl-group right" style="justify-content:flex-end; gap:10px;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="merge-preview-right">
+                        <div class="merge-preview-queue">
+                            <div class="merge-preview-queue-title">
+                                <span>片段队列</span>
+                                <span id="mergePreviewQueueMeta" style="opacity:0.85;"></span>
+                            </div>
+                            <div id="mergePreviewQueueList"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主内容 -->
+    <div class="scroll-wrapper" id="mainContent" style="display:none;">
+        <div class="container">
+            <h1>括弧笑直播切片工具</h1>
+
+
+            <!-- 预览区域（单独分开，位于下方） -->
+            <div class="panel preview-panel">
+                <div id="videoContainer" class="video-placeholder-container video-container-compact">
+                    <div class="panel-title">
+                        <div class="panel-title-text">视频预览</div>
+                        <span id="videoTitleFilename" class="panel-title-filename" title="">请选择视频</span>
+                        <!-- 小屏提示：仅在紧凑模式显示，位置位于按钮上方 -->
+                        <div class="preview-empty-hint" aria-hidden="true">空间不足，无法显示预览</div>
+                        <button id="openFileTreeBtnCompact" class="select-video-btn compact-title-btn compact"
+                            type="button" title="选择视频">选择视频</button>
+                    </div>
+                    <!-- 文件名与选择视频按钮区域 (常驻) -->
+                    <div class="video-header">
+                        <div class="video-header-actions">
+                            <!-- 选择/更换视频按钮已集成至控制栏，标题中显示文件名 -->
+                        </div>
+                    </div>
+
+                    <!-- 预览按钮区域 -->
+                    <div id="previewActionArea" style="text-align: center; width: 100%;">
+                    </div>
+
+                    <div id="playerWrapper" tabindex="-1"
+                        style="display:flex; flex-direction:column; width:100%; max-width:100%;">
+                        <div id="videoStage" class="video-stage">
+                            <video id="player" preload="metadata"
+                                style="display:block; width:100%; height:100%;"></video>
+
+                            <!-- 视频加载提示（网络差时显示） -->
+                            <div id="videoLoadingHint" class="video-loading-hint" style="display:none;">视频加载中…</div>
+
+                            <div id="videoStageOverlay" class="video-stage-overlay" aria-hidden="true">
+                                <div class="video-stage-overlay-content">
+                                    <span id="videoStageOverlayText">未选择视频</span>
+                                    <button id="openFileTreeBtnOverlay" class="select-video-btn" type="button"
+                                        style="display:none; margin-top:8px;">选择视频</button>
+                                    <button id="previewBtn" style="display:none;">预览</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="videoControlsContainer" class="video-controls">
+                            <!-- 改良版进度条（自定义视觉 + 缓冲显示） -->
+                            <div class="progress-row">
+                                <input type="range" id="progressBar" class="custom-range player-progress" value="0"
+                                    min="0" step="0.01" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100"
+                                    aria-valuenow="0">
+                                <div id="progressTooltip" class="progress-tooltip" aria-hidden="true">00:00:00</div>
+                            </div>
+
+                            <!-- 按钮控制行 -->
+                            <div class="buttons-row main-ctrls">
+                                <!-- 左侧：播放与时间 -->
+                                <div class="ctrl-group left">
+                                    <button id="playPauseBtn" class="icon-btn" title="播放/暂停">播放</button>
+                                    <span id="timeDisplay" class="time-text">00:00:00 / 00:00:00</span>
+                                </div>
+
+                                <!-- 右侧：倍速 + 选择视频（已集成） -->
+                                <div class="ctrl-group right">
+                                    <span id="speedSelectGroup" class="tl-zoom-group tl-zoom-collapsed">
+                                        <button id="speedSelectToggle" class="tl-zoom-btn tl-zoom-toggle" type="button"
+                                            title="播放速度">1.0x ▾</button>
+                                        <div id="speedSelectMenu" class="tl-zoom-menu">
+                                            <button class="tl-zoom-menu-item" type="button" data-speed="0.5">0.5x</button>
+                                            <button class="tl-zoom-menu-item active" type="button" data-speed="1.0">1.0x</button>
+                                            <button class="tl-zoom-menu-item" type="button" data-speed="1.25">1.25x</button>
+                                            <button class="tl-zoom-menu-item" type="button" data-speed="1.5">1.5x</button>
+                                        </div>
+                                    </span>
+
+                                    <select id="speedSelect" class="speed-select native-speed-select-hidden" title="播放速度"
+                                        aria-hidden="true" tabindex="-1">
+                                        <option value="0.5">0.5x</option>
+                                        <option value="1.0" selected>1.0x</option>
+                                        <option value="1.25">1.25x</option>
+                                        <option value="1.5">1.5x</option>
+                                    </select>
+
+                                    <span class="main-ctrl-pinned">
+                                        <!-- 集成的选择/添加视频按钮（保留原 id，复用现有 JS 逻辑） -->
+                                        <button id="openFileTreeBtn" class="select-video-btn icon-btn small" type="button"
+                                            title="选择视频">选择视频</button>
+
+                                        <button id="fullscreenBtn" class="icon-btn" title="全屏"
+                                            style="padding: 4px 10px;">⛶</button>
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- 时间轴编辑区 -->
+                            <div id="timelineArea" class="timeline-in-controls"></div>
+
+                            <!-- 裁切控制行 -->
+                            <div class="clip-ctrl-bar">
+                                <button id="quickSetStartBtn" class="icon-btn shortcut-btn-group clip-ctrl-mark"
+                                    title="设为起点 [Q]">
+                                    <span class="clip-ctrl-mark-label">Start [Q]</span>
+                                    <span id="ctrlStartDisp" class="clip-ctrl-mark-time">--:--:--</span>
+                                </button>
+                                <button id="quickSetEndBtn" class="icon-btn shortcut-btn-group clip-ctrl-mark"
+                                    title="设为终点并自动添加片段 [W]">
+                                    <span class="clip-ctrl-mark-label">End+Add [W]</span>
+                                    <span id="ctrlEndDisp" class="clip-ctrl-mark-time">--:--:--</span>
+                                </button>
+                                <button id="quickPlayClipBtn" class="icon-btn clip-ctrl-action" title="预览选中片段 [P]">▶
+                                    Play [P]</button>
+                                <button id="quickAddClipBtnCtrl" class="icon-btn clip-ctrl-action clip-ctrl-add"
+                                    title="添加片段 [C]">＋ Add [C]</button>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+
+            <!-- 新的切片工坊区域 -->
+            <div class="panel" id="clipWorkshopPanel">
+                <div style="margin-bottom:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3 class="panel-title">片段工坊</h3>
+                    </div>
+                    <div id="currentVideoInfoBlock" class="current-video-info" style="display:none; margin-top:8px;">
+                        <div style="font-size:12px; opacity:0.8;">正在编辑视频</div>
+                        <div id="currentVideoLabel"
+                            style="font-size:16px; font-weight:bold; color:var(--accent-color); word-break:break-all;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 时间轴/片段控制区 -->
+                <div class="clip-studio" style="display:flex; flex-direction:column; gap:20px;">
+                    <!-- 上：快速控制与添加 -->
+                    <div
+                        style="width:100%; background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; box-sizing:border-box;">
+
+                        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
+                            <input id="newClipStart" type="text" placeholder="起点 (00:00:00)"
+                                style="flex:1; min-width:0; text-align:center;">
+                            <span style="color:var(--muted-color);">→</span>
+                            <input id="newClipEnd" type="text" placeholder="终点 (00:00:00)"
+                                style="flex:1; min-width:0; text-align:center;">
+                        </div>
+
+                        <button id="confirmAddClipBtn"
+                            style="width:100%; padding:10px; background:var(--accent-color); border-color:transparent;">
+                            确认添加片段
+                        </button>
+                    </div>
+
+
+                    <!-- 下：已添加片段列表 -->
+                    <div style="width:100%; box-sizing:border-box;">
+                        <div
+                            style="display:flex; justify-content:space-between; margin-bottom:8px; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <div style="font-weight:700;">待合并片段列表：</div>
+                            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                <button id="previewMergeBtn"
+                                    style="padding:2px 8px; font-size:12px; background:rgba(79, 158, 255, 0.25);">预览合并</button>
+                                <button id="clearAllClipsFn"
+                                    style="padding:2px 8px; font-size:12px; background:rgba(255,50,50,0.3);">清空</button>
+                            </div>
+                        </div>
+                        <div id="newClipListContainer" class="clip-list-scroll">
+                            <div style="text-align:center; padding:20px; color:var(--muted-color);">暂无片段</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">提交合并</div>
+                <div class="merge-submit-grid">
+                    <div class="merge-submit-field">
+                        <label for="usernameInput">用户名称：</label>
+                        <input id="usernameInput" name="bili_display_name" type="text" placeholder="用于命名切片文件"
+                            autocomplete="off" data-bwignore="true" data-1p-ignore="true" data-lpignore="true">
+                    </div>
+
+                    <div class="merge-submit-field">
+                        <label for="clipTitleInput">文件名称（可选）：</label>
+                        <input id="clipTitleInput" type="text" placeholder="默认为merged">
+                        <div id="filenamePreview"
+                            style="margin-top:6px; font-size:12px; color:var(--muted-color); display:none;">
+                            预览文件名：<span id="filenamePreviewText"
+                                style="font-family:monospace; color:var(--accent-color);"></span>
+                        </div>
+                    </div>
+
+                    <div class="merge-submit-field" style="margin-bottom:12px;">
+                        <div style="display:block; margin-bottom:6px; font-weight:700;">源版本</div>
+                        <div class="source-selection-group">
+                            <label class="source-option">
+                                <input type="radio" name="sourceMode" value="encode" checked>
+                                <div class="source-content">
+                                    <span class="source-title">压制版</span>
+                                    <span class="source-desc">压制弹幕</span>
+                                </div>
+                            </label>
+                            <label class="source-option">
+                                <input type="radio" name="sourceMode" value="original">
+                                <div class="source-content">
+                                    <span class="source-title">原版</span>
+                                    <span class="source-desc">没有进行压制</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="merge-submit-field" style="margin-bottom:12px;">
+                        <div style="display:block; margin-bottom:6px; font-weight:700;">切割模式</div>
+                        <div class="source-selection-group">
+                            <label class="source-option">
+                                <input type="radio" name="cutMode" value="fast" checked>
+                                <div class="source-content">
+                                    <span class="source-title">快速切割</span>
+                                    <span class="source-desc">速度快，切点可能不精准（±几秒）。最大 <strong>120 分钟</strong></span>
+                                </div>
+                            </label>
+                            <label class="source-option">
+                                <input type="radio" name="cutMode" value="precise">
+                                <div class="source-content">
+                                    <span class="source-title">精准切割</span>
+                                    <span class="source-desc">精确到帧，但需要重新编码，速度较慢。最大 <strong>30 分钟</strong></span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="merge-submit-actions">
+                        <button id="mergeAllBtn">开始合并</button>
+                        <button id="openHistoryBtn" type="button" style="display:none;">历史输出</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="site-stats-footer" id="siteStatsFooter" aria-live="polite">
+            <span>访问次数：<strong id="visitCount">{{ (stats.visit_count if stats else 0) }}</strong></span>
+            <span>合并成功：<strong id="mergeSuccessCount">{{ (stats.merge_success_count if stats else 0) }}</strong></span>
+            <span>下载次数：<strong id="downloadCount">{{ (stats.download_count if stats else 0) }}</strong></span>
+        </div>
+    </div>
+
+    <!-- 文件树弹窗 -->
+    <div id="fileTreeModalOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true"
+        aria-labelledby="fileTreeModalTitle">
+        <div class="modal filetree-modal" role="document">
+            <header class="modal-header"
+                style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-start;">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <h2 id="fileTreeModalTitle" style="font-weight:800; font-size:16px; margin:0;">选择视频文件</h2>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <button id="fileTreeModalBackBtn" class="back-btn modal-btn" type="button" aria-label="返回"
+                            disabled>← 返回</button>
+                        <div id="fileTreeModalPath" class="modal-path" aria-hidden="true">/</div>
+                    </div>
+                </div>
+            </header>
+            <div class="modal-body filetree-modal-body">
+                <div id="fileTree" class="file-tree" tabindex="0" aria-label="文件列表"></div>
+            </div>
+            <footer class="modal-actions filetree-modal-actions">
+                <button id="fileTreeModalClose" class="modal-btn" type="button">关闭</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- 悬浮进度挂件 -->
+    <div id="floatingProgressWidget" class="floating-progress-widget" style="display: none;">
+        <div class="fp-spinner"></div>
+        <div class="fp-text">正在处理...</div>
+    </div>
+
+    <!-- 进度弹窗 -->
+    <div id="progressModalOverlay" class="modal-overlay" aria-hidden="true">
+        <div class="modal" role="dialog" aria-modal="true" style="max-width: 520px; width: 90%;">
+            <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between;">
+                <span id="progressModalTitle" style="font-size: 15px;">合并进度</span>
+                <button type="button" class="modal-btn close-modal" aria-label="关闭">×</button>
+            </div>
+            <div class="modal-body" id="progressModalBody" style="padding-bottom: 0;">
+                <!-- 动态内容渲染至此 -->
+            </div>
+
+            <!-- 常驻：取消当前任务（始终显示） -->
+            <div class="modal-actions" style="justify-content: center; padding: 16px;">
+                <button id="cancelMergeBtnModalFixed" type="button" class="modal-btn modal-btn-danger"
+                    style="width:100%; justify-content:center;">取消当前任务</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 时间轴全局 Tooltip -->
+    <div id="timelineTooltip" class="timeline-tooltip"></div>
+
+    <script src='/static/script.js'></script>
+
+</body>
+
+</html>
