@@ -19,7 +19,7 @@ fi
 # 在线切片static静态文件安装
 for file in /opt/webclip/static/*; do
     filename=$(basename "$file")
-    target="/rec/在线切片/$filename"
+    target="/rec/在线切片/static/$filename"
     if [ -f "$file" ] && [ ! -f "$target" ]; then
         cp "$file" "$target"
     fi
@@ -27,7 +27,7 @@ done
 # 在线切片templates模板文件安装
 for file in /opt/webclip/templates/*; do
     filename=$(basename "$file")
-    target="/rec/在线切片/$filename"
+    target="/rec/在线切片/templates/$filename"
     if [ -f "$file" ] && [ ! -f "$target" ]; then
         cp "$file" "$target"
     fi
