@@ -23,9 +23,6 @@ generate_upload_desc() {
   echo "直播间标题：$stream_title
 录制平台：$recording_platform
 
-原始录制文件（超过一个月的视频文件不定期删除）：
-https://yourls.xct258.top/zbhf-khx
-
 括弧笑频道主页：
 bilibili
 顶级尼鸡塔结晶
