@@ -1,0 +1,67 @@
+name: khx-live-docker  # 工作流名称，将显示在 GitHub Actions UI 中
+
+on:
+  # 定时触发：每月1日的 00:00 UTC 自动运行一次（可用于自动构建/发布）
+  schedule:
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+env:
+  # Docker Hub 镜像仓库名（你的账号/镜像名称）
+  DOCKERHUB_REPO: xct258/khx-live
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # 指定在 GitHub 提供的 Ubuntu 最新 runner 上执行
+
+    permissions:
+      contents: read         # 读取代码仓库内容的权限
+      packages: write        # 写入 GitHub Packages（如发布镜像）权限
+      id-token: write        # 用于身份验证的权限（例如 Cosign 签名）
+
+    steps:
+      # Step 1: 生成当前日期字符串，用于动态 tag 镜像
+      #- name: Get current date
+        #id: date
+        #run: echo "today=$(date +'%Y-%m-%d_%H-%M')" >> "$GITHUB_OUTPUT"
+
+      # Step 2: 检出代码仓库内容（必须步骤）
+      - name: Checkout repository
+        uses: actions/checkout@v4  # https://github.com/actions/checkout
+
+      # Step 3: 安装 Cosign
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.8.2  # https://github.com/sigstore/cosign-installer
+
+      # Step 4: 配置 Docker Buildx，支持多平台构建
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3  # https://github.com/docker/setup-buildx-action
+
+      # Step 5: 登录 Docker Hub（使用 GitHub Secrets 中的账号和密码）
+      - name: Docker Login
+        uses: docker/login-action@v3  # https://github.com/docker/login-action
+        with:
+          username: ${{ secrets.DOCKERACC }}
+          password: ${{ secrets.DOCKERPWD }}
+
+      # Step 6: 生成 Docker 镜像的标签（tags）和标签信息（labels）
+      - name: Docker metadata (tagging)
+        id: meta
+        uses: docker/metadata-action@v5  # https://github.com/docker/metadata-action
+        with:
+          images: ${{ env.DOCKERHUB_REPO }}
+          tags: |
+            type=raw,value=latest  # 固定标签 latest
+            #type=raw,value=${{ steps.date.outputs.today }}  # 使用日期作为 tag，比如 2025-05-03_00-00
+
+      # Step 7: 构建并推送 Docker 镜像
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v6  # https://github.com/docker/build-push-action
+        with:
+          context: .                                # 当前目录作为构建上下文
+          push: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          platforms: linux/amd64,linux/arm64        # 同时构建 x86 和 ARM 版本
+          #platforms: linux/amd64        # 构建 x86 版本
+          labels: ${{ steps.meta.outputs.labels }}  # 镜像标签信息（metadata-action 生成）
+          tags: ${{ steps.meta.outputs.tags }}      # 镜像 tag（包括 latest 和日期 tag）
