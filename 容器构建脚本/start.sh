@@ -13,7 +13,7 @@ fi
 
 # 在线切片安装
 if [ ! -f /rec/在线切片/app.py ]; then
-    cp /opt/webclip/app.py /rec/在线切片/
+    cp /opt/webclip/app.py /rec/在线切片/app.py
 fi
 
 # 在线切片static静态文件安装
@@ -35,7 +35,7 @@ done
 
 # biliup安装
 if [ ! -f /rec/biliup/biliup ]; then
-    cp /root/biliup/biliup /rec/biliup/
+    cp /root/biliup/biliup /rec/biliup/biliup
 fi
 
 # 复制 /opt/bililive/biliup 到 /rec/biliup/脚本
