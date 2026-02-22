@@ -362,6 +362,13 @@ button:active {
     border-radius: 8px;
     overflow: hidden;
     transition: opacity 200ms ease;
+    /* 默认背景色防止透明空白 */
+    background: #000;
+}
+
+/* 正在加载时增加深色背景层，避免出现透明效果 */
+.video-stage.loading {
+    background: #000;
 }
 
 .video-stage.dimmed {
@@ -673,6 +680,12 @@ button:active {
 }
 
 .file-tree .no-files {
+    padding: 28px;
+    text-align: center;
+    color: var(--muted-color);
+}
+
+.file-tree-empty {
     padding: 28px;
     text-align: center;
     color: var(--muted-color);

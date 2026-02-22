@@ -1,5 +1,23 @@
 ﻿let currentVideoName = '';
 let currentTreePath = ''; // 当前文件树路径（用于“进入文件夹”模式）
+
+// 默认显示的树路径（虚拟根目录）
+function getDefaultTreePath() {
+    return '';
+}
+// 记住上次打开的文件树路径（localStorage）
+function getLastTreePath() {
+    try {
+        const saved = localStorage.getItem('bililive_last_tree_path');
+        if (saved !== null) return String(saved).trim();
+    } catch (e) { }
+    return '';
+}
+function saveLastTreePath(path) {
+    try {
+        localStorage.setItem('bililive_last_tree_path', String(path || '').trim());
+    } catch (e) { }
+}
 let videoTasks = []; // 存储所有视频的任务结构
 let __stopTimelineThumbLoading = null;
 
@@ -2453,8 +2471,8 @@ const clearAllClipsFn = document.getElementById('clearAllClipsFn');
 
 let tempStart = null;
 let tempEnd = null;
-// const dynamicImageUrl = 'https://random-image.xct258.top/';
-const dynamicImageUrl = 'http://192.168.50.4:8181/';
+const dynamicImageUrl = 'https://random-image.xct258.top/';
+// const dynamicImageUrl = 'http://192.168.50.4:8181/';
 
 // ------------------ Toast 工具 ------------------
 function ensureToastHost() {
@@ -2922,7 +2940,7 @@ async function initPage() {
             if (clearAllClipsFn) clearAllClipsFn.style.display = show ? '' : 'none';
         } catch (e) { }
         __renderOutputHistory();
-        loadFileTree();
+        loadFileTree(getLastTreePath() || getDefaultTreePath()); // 恢复上次打开的路径，无记录则用当前月份
         __startMergeStatusPolling();
         __startSiteStatsPolling();
         refreshVideoStageDim();
@@ -2947,6 +2965,8 @@ function __openFileTreeModal() {
         overlay.__previouslyFocused = document.activeElement;
         overlay.classList.add('show');
         overlay.setAttribute('aria-hidden', 'false');
+        // 恢复上次打开的路径，无记录则用当前月份
+        loadFileTree(getLastTreePath() || getDefaultTreePath());
         // focus file list for keyboard users and center selected item
         if (ft) {
             setTimeout(() => {
@@ -3033,6 +3053,9 @@ if (fileTreeModalOverlay) {
 // ------------------ 文件树 ------------------
 async function loadFileTree(path = '', sourceLi = null) {
     // 切换当前路径（空字符串表示根目录）
+    if (!path) {
+        path = getDefaultTreePath();
+    }
     currentTreePath = String(path || '').trim();
 
     // Loading UI: 若由某个目录点击触发，则在该 li 显示 spinner；否则在整个列表右上显示全局 spinner。
@@ -3062,6 +3085,18 @@ async function loadFileTree(path = '', sourceLi = null) {
                 }
             });
         }
+
+        // 自动后退逻辑：如果当前目录（非根目录）没有内容，自动返回上级
+        if (currentTreePath && Array.isArray(tree) && tree.length === 0) {
+            const parts = currentTreePath.split('/').filter(Boolean);
+            const parent = parts.slice(0, -1).join('/');
+            console.log(`目录空或失效，自动回退: ${currentTreePath} -> ${parent || '/'}`);
+            return loadFileTree(parent || '');
+        }
+
+        // 确定有效后记入存储
+        saveLastTreePath(currentTreePath);
+
     } catch (err) {
         console.error('加载目录或时长失败', err);
     } finally {
@@ -3096,11 +3131,15 @@ async function loadFileTree(path = '', sourceLi = null) {
             } else {
                 modalBack.style.display = 'none';
             }
-            modalBack.disabled = !currentTreePath;
+            // 根目录或已在"压制版"顶层时禁用返回（再往上没有意义，会循环）
+            // 处于虚拟根目录时禁用返回
+            const isAtRoot = !currentTreePath;
+            modalBack.disabled = isAtRoot;
             modalBack.onclick = () => {
+                if (isAtRoot) return;
                 const parts = currentTreePath.split('/').filter(Boolean);
                 const parent = parts.slice(0, -1).join('/');
-                loadFileTree(parent);
+                loadFileTree(parent || '');
             };
         }
     } catch (e) { /* ignore */ }
@@ -3245,6 +3284,18 @@ async function loadFileTree(path = '', sourceLi = null) {
     }
 
     fileTreeDiv.appendChild(createTree(tree));
+
+    // 空状态提示：当前目录下没有任何文件和子目录时，显示提示
+    if (Array.isArray(tree) && tree.length === 0) {
+        const emptyHint = document.createElement('div');
+        emptyHint.className = 'file-tree-empty-hint';
+        emptyHint.textContent = '暂无可用视频文件';
+        emptyHint.style.textAlign = 'center';
+        emptyHint.style.padding = '32px 16px';
+        emptyHint.style.color = 'var(--muted-color, #888)';
+        emptyHint.style.fontSize = '14px';
+        fileTreeDiv.appendChild(emptyHint);
+    }
 
     /* 时长在渲染前已一次性加载并注入到节点中（以避免视图切换后再填充引起的闪烁）。 */
 }
@@ -5292,6 +5343,8 @@ let __videoLoadHintTimer = null;
 let __videoLoadHintHideTimer = null;
 function showVideoLoadingHint(text = '视频加载中…') {
     const el = document.getElementById('videoLoadingHint');
+    const stage = document.getElementById('videoStage');
+    if (stage) stage.classList.add('loading');
     if (!el) return;
     el.textContent = text;
     if (__videoLoadHintHideTimer) {
@@ -5306,6 +5359,8 @@ function showVideoLoadingHint(text = '视频加载中…') {
 }
 function hideVideoLoadingHint() {
     const el = document.getElementById('videoLoadingHint');
+    const stage = document.getElementById('videoStage');
+    if (stage) stage.classList.remove('loading');
     if (!el) return;
     el.classList.remove('show');
     el.classList.add('hiding');
@@ -5319,6 +5374,8 @@ function hideVideoLoadingHint() {
     if (__videoLoadHintTimer) { clearTimeout(__videoLoadHintTimer); __videoLoadHintTimer = null; }
 }
 function _startVideoLoadWatcher(timeoutMs = 1200) {
+    const stage = document.getElementById('videoStage');
+    if (stage) stage.classList.add('loading');
     if (__videoLoadHintTimer) { clearTimeout(__videoLoadHintTimer); __videoLoadHintTimer = null; }
     hideVideoLoadingHint();
     __videoLoadHintTimer = setTimeout(() => {
@@ -6419,8 +6476,8 @@ document.addEventListener('keydown', (e) => {
                 const lp = c.start / dur * 100;
                 const wp = Math.max((c.end - c.start) / dur * 100, 0);
                 const clipKey = _tlClipKey(task.name, c, ci);
-            const clipColor = TL_CLIP_COLOR_RGBS[clipColorIndex % TL_CLIP_COLOR_RGBS.length];
-            clipColorIndex += 1;
+                const clipColor = TL_CLIP_COLOR_RGBS[clipColorIndex % TL_CLIP_COLOR_RGBS.length];
+                clipColorIndex += 1;
                 validKeys.add(clipKey);
                 const el = document.createElement('div');
                 el.className = 'timeline-clip' + (__tlSelectedClipKeys.has(clipKey) ? ' selected' : '');

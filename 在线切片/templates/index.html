@@ -276,7 +276,7 @@
                             <div class="progress-row">
                                 <input type="range" id="progressBar" class="custom-range player-progress" value="0"
                                     min="0" step="0.01" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100"
-                                    aria-valuenow="0">
+                                    aria-valuenow="0" disabled>
                                 <div id="progressTooltip" class="progress-tooltip" aria-hidden="true">00:00:00</div>
                             </div>
 
@@ -284,7 +284,7 @@
                             <div class="buttons-row main-ctrls">
                                 <!-- 左侧：播放与时间 -->
                                 <div class="ctrl-group left">
-                                    <button id="playPauseBtn" class="icon-btn" title="播放/暂停">播放</button>
+                                    <button id="playPauseBtn" class="icon-btn" title="播放/暂停" disabled>播放</button>
                                     <span id="timeDisplay" class="time-text">00:00:00 / 00:00:00</span>
                                 </div>
 
@@ -292,7 +292,7 @@
                                 <div class="ctrl-group right">
                                     <span id="speedSelectGroup" class="tl-zoom-group tl-zoom-collapsed">
                                         <button id="speedSelectToggle" class="tl-zoom-btn tl-zoom-toggle" type="button"
-                                            title="播放速度">1.0x ▾</button>
+                                            title="播放速度" disabled>1.0x ▾</button>
                                         <div id="speedSelectMenu" class="tl-zoom-menu">
                                             <button class="tl-zoom-menu-item" type="button" data-speed="0.5">0.5x</button>
                                             <button class="tl-zoom-menu-item active" type="button" data-speed="1.0">1.0x</button>
@@ -302,7 +302,7 @@
                                     </span>
 
                                     <select id="speedSelect" class="speed-select native-speed-select-hidden" title="播放速度"
-                                        aria-hidden="true" tabindex="-1">
+                                        aria-hidden="true" tabindex="-1" disabled>
                                         <option value="0.5">0.5x</option>
                                         <option value="1.0" selected>1.0x</option>
                                         <option value="1.25">1.25x</option>
@@ -315,7 +315,7 @@
                                             title="选择视频">选择视频</button>
 
                                         <button id="fullscreenBtn" class="icon-btn" title="全屏"
-                                            style="padding: 4px 10px;">⛶</button>
+                                            style="padding: 4px 10px;" disabled>⛶</button>
                                     </span>
                                 </div>
                             </div>
@@ -326,19 +326,19 @@
                             <!-- 裁切控制行 -->
                             <div class="clip-ctrl-bar">
                                 <button id="quickSetStartBtn" class="icon-btn shortcut-btn-group clip-ctrl-mark"
-                                    title="设为起点 [Q]">
+                                    title="设为起点 [Q]" disabled>
                                     <span class="clip-ctrl-mark-label">Start [Q]</span>
                                     <span id="ctrlStartDisp" class="clip-ctrl-mark-time">--:--:--</span>
                                 </button>
                                 <button id="quickSetEndBtn" class="icon-btn shortcut-btn-group clip-ctrl-mark"
-                                    title="设为终点并自动添加片段 [W]">
+                                    title="设为终点并自动添加片段 [W]" disabled>
                                     <span class="clip-ctrl-mark-label">End+Add [W]</span>
                                     <span id="ctrlEndDisp" class="clip-ctrl-mark-time">--:--:--</span>
                                 </button>
-                                <button id="quickPlayClipBtn" class="icon-btn clip-ctrl-action" title="预览选中片段 [P]">▶
+                                <button id="quickPlayClipBtn" class="icon-btn clip-ctrl-action" title="预览选中片段 [P]" disabled>▶
                                     Play [P]</button>
                                 <button id="quickAddClipBtnCtrl" class="icon-btn clip-ctrl-action clip-ctrl-add"
-                                    title="添加片段 [C]">＋ Add [C]</button>
+                                    title="添加片段 [C]" disabled>＋ Add [C]</button>
                             </div>
                         </div>
                     </div>

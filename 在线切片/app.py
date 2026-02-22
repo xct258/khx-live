@@ -25,8 +25,15 @@ except Exception:  # pragma: no cover
 
 # ------------------ 配置 ------------------
 BASE_DIR = Path(__file__).parent.resolve()
-VIDEO_DIR = BASE_DIR / "videos"
-OUTPUT_DIR = BASE_DIR / "clips"
+VIDEO_DIR = Path("/rec/videos")
+TMP_OUTPUT_DIR = BASE_DIR / "clips_tmp"
+OUTPUT_DIR = Path("/rec/videos/切片成品")
+# additional directory where completed files may be relocated after merge
+FINISHED_DIR = Path("/rec/videos/成品")
+# prefix included in returned paths that points to FINISHED_DIR
+FINISHED_PREFIX = "成品/"
+
+COVER_DIR = OUTPUT_DIR / "covers"  # store uploaded cover images separately
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"
@@ -35,7 +42,7 @@ ALLOWED_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 # 脚本内测试模式开关：设为 True 则上传进入测试模式（只返回命令预览），False正常上传
 UPLOAD_TEST_MODE = True
 
-for d in [VIDEO_DIR, OUTPUT_DIR, TEMPLATE_DIR, STATIC_DIR, THUMB_CACHE_DIR]:
+for d in [VIDEO_DIR, TMP_OUTPUT_DIR, OUTPUT_DIR, FINISHED_DIR, COVER_DIR, TEMPLATE_DIR, STATIC_DIR, THUMB_CACHE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 MERGE_STATE_PATH = BASE_DIR / "merge_state.json"
@@ -630,14 +637,50 @@ def ffmpeg_exists() -> bool:
     return shutil.which("ffmpeg") is not None
 
 def sanitize_name(name: str) -> Path:
-    path = (VIDEO_DIR / name).resolve()
+    p = name.lstrip("/\\")
+    # 括弧笑bilibili/压制版 或 括弧笑bilibili/原版
+    # 如果路径不以 "括弧笑bilibili" 开头，则补上默认前缀
+    if p and not p.startswith("括弧笑bilibili"):
+        if p.startswith("压制版") or p.startswith("原版"):
+            p = "括弧笑bilibili/" + p
+        else:
+            p = "括弧笑bilibili/压制版/" + p
+        
+    path = (VIDEO_DIR / p).resolve()
     if not str(path).startswith(str(VIDEO_DIR.resolve())):
         raise HTTPException(400, "非法路径")
     return path
 
 
 def sanitize_output_name(name: str) -> Path:
-    path = (OUTPUT_DIR / name).resolve()
+    """Return a normalized path for an output file.
+
+    Clients may send a relative name that either refers to ``OUTPUT_DIR`` or,
+    after the new move-feature, ``FINISHED_DIR``.  A prefixed value
+    (``{FINISHED_PREFIX}...``) hints that the latter should be used.  If no
+    prefix is provided both bases are searched, returning the first existing
+    file.
+    """
+    p = name.lstrip("/\\")
+
+    # explicit finished directory prefix takes precedence
+    if p.startswith(FINISHED_PREFIX):
+        rel = p[len(FINISHED_PREFIX):]
+        path = (FINISHED_DIR / rel).resolve()
+        if not str(path).startswith(str(FINISHED_DIR.resolve())):
+            raise HTTPException(400, "非法路径")
+        return path
+
+    # otherwise try searching output then finished
+    for base in (OUTPUT_DIR, FINISHED_DIR):
+        cand = (base / p).resolve()
+        if not str(cand).startswith(str(base.resolve())):
+            continue
+        if cand.exists():
+            return cand
+
+    # no existing file; return safe OUTPUT_DIR candidate for proper error
+    path = (OUTPUT_DIR / p).resolve()
     if not str(path).startswith(str(OUTPUT_DIR.resolve())):
         raise HTTPException(400, "非法路径")
     return path
@@ -657,6 +700,26 @@ def iter_file_range(path: Path, start: int = 0, end: Optional[int] = None, chunk
                     yield data
                     break
             yield data
+
+
+def _rel_output_path(path: Path) -> str:
+    """Return a relative path string for ``path``.
+
+    When the file lives in ``FINISHED_DIR`` include the special
+    ``FINISHED_PREFIX`` so that clients know to look there.  Older state
+    entries without the prefix remain supported.
+    """
+    try:
+        rel = path.relative_to(OUTPUT_DIR)
+        return str(rel).replace("\\", "/")
+    except Exception:
+        pass
+    try:
+        rel = path.relative_to(FINISHED_DIR)
+        return FINISHED_PREFIX + str(rel).replace("\\", "/")
+    except Exception:
+        # fallback to raw string if it's somehow outside both bases
+        return str(path)
 
 
 def _ffprobe_duration(path: Path) -> float:
@@ -803,6 +866,32 @@ def _startup_merge_state_reconcile():
             state["error"] = "服务重启，已自动将 running 任务标记为 error"
             state["finished_at"] = int(time.time())
             _write_merge_state_unlocked(state)
+
+    # 启动时清理可能遗留的临时切片文件，避免 TMP_OUTPUT_DIR 长期累积
+    try:
+        for p in TMP_OUTPUT_DIR.iterdir():
+            try:
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 同时清理封面目录，避免旧封面无主堆积
+    try:
+        for p in COVER_DIR.iterdir():
+            try:
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 @app.get("/api/merge_status")
@@ -1024,23 +1113,34 @@ async def video_tree(path: str = ""):
     - dir 节点返回 hasChildren，用于前端决定是否可展开。
     """
 
-    def _dir_has_children_fast(dir_path: Path) -> bool:
+    def _dir_has_preview_files(dir_path: Path) -> bool:
+        """递归检查目录下是否存在预览版文件。"""
         try:
             for entry in dir_path.iterdir():
                 try:
-                    if entry.is_dir():
-                        return True
                     if entry.is_file() and entry.suffix.lower() in ALLOWED_EXTS and entry.name.startswith(PREVIEW_PREFIX):
                         return True
+                    if entry.is_dir():
+                        if _dir_has_preview_files(entry):
+                            return True
                 except Exception:
                     continue
         except Exception:
-            return False
+            pass
         return False
 
-    target_dir = sanitize_name(path)
+    # 逻辑根目录强制设为"括弧笑bilibili/压制版"
+    encode_root = VIDEO_DIR / "括弧笑bilibili" / "压制版"
+    
+    # 将前端传入的相对路径映射到逻辑根目录下
+    target_dir = (encode_root / path.strip("/\\")).resolve()
+    
+    # 安全性检查：确保仍然在 encode_root 范围内
+    if not str(target_dir).startswith(str(encode_root.resolve())):
+         raise HTTPException(status_code=400, detail="非法路径")
+
     if not target_dir.exists() or not target_dir.is_dir():
-        raise HTTPException(status_code=404, detail="目录不存在")
+        return []
 
     cache_key = str(target_dir)
     now = time.time()
@@ -1048,7 +1148,6 @@ async def video_tree(path: str = ""):
         cached = _tree_cache.get(cache_key)
         if cached is not None:
             ts, data = cached
-            # 短 TTL：平衡性能与目录实时性
             if now - ts <= 5.0:
                 return data
 
@@ -1058,6 +1157,8 @@ async def video_tree(path: str = ""):
         for p in target_dir.iterdir():
             try:
                 if p.is_dir():
+                    if not _dir_has_preview_files(p):
+                        continue
                     dirs.append(p)
                 elif p.is_file() and p.suffix.lower() in ALLOWED_EXTS and p.name.startswith(PREVIEW_PREFIX):
                     files.append(p)
@@ -1066,29 +1167,31 @@ async def video_tree(path: str = ""):
     except Exception:
         raise HTTPException(status_code=500, detail="无法读取目录")
 
-    dirs.sort(key=lambda x: x.name.lower())
+    dirs.sort(key=lambda x: x.name.lower(), reverse=True)
     files.sort(key=lambda x: x.name.lower())
 
     tree: List[dict] = []
     for d in dirs:
-        rel = str(d.relative_to(VIDEO_DIR)).replace("\\", "/")
+        # 返回相对于 encode_root 的路径（不含"压制版"）
+        rel = str(d.relative_to(encode_root)).replace("\\", "/")
         tree.append(
             {
                 "type": "dir",
                 "name": d.name,
                 "path": rel,
-                "hasChildren": _dir_has_children_fast(d),
+                "hasChildren": True,
             }
         )
 
     for f in files:
-        rel_file = str(f.relative_to(VIDEO_DIR)).replace("\\", "/")
+        # 返回相对于 encode_root 的路径
+        rel_file = str(f.relative_to(encode_root)).replace("\\", "/")
         st = f.stat()
         tree.append(
             {
                 "type": "file",
                 "name": rel_file,
-                "basename": f.name,  # 仅文件名，用于显示
+                "basename": f.name,
                 "size": st.st_size,
                 "mtime": st.st_mtime,
                 "duration": 0,
@@ -1128,6 +1231,7 @@ async def get_dir_durations(path: str = ""):
                 pass
     return res_map
 
+
 # ------------------ 批量合并 ------------------
 @app.post("/api/slice_merge_all")
 async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTasks = None):
@@ -1156,14 +1260,21 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
         raise HTTPException(400, f"最终合并总时长不能超过{max_minutes}分钟（当前约 {int(total_seconds)} 秒）")
 
     username = getattr(body, "username", None) or "user"
+    # 简单对用户名做文件名安全处理，避免目录穿越或者特殊字符
+    safe_user = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", username).strip(" .")
+    if not safe_user:
+        safe_user = "user"
+
     if not ffmpeg_exists():
         raise HTTPException(500, "ffmpeg not found in PATH")
     
     ts = datetime.now().strftime("%Y%m%d_%H%M")
-    # 输出文件名改为：用户名-原本名字-时间戳.mp4
+    # 输出文件名改为：用户名-原本名字-时间戳.mp4，并放在用户子目录中
     out_basename_base = f"{username}-{body.out_basename or 'merged'}-{ts}"
     out_basename = out_basename_base
-    out_path = OUTPUT_DIR / f"{out_basename}.mp4"
+    user_dir = OUTPUT_DIR / safe_user
+    user_dir.mkdir(parents=True, exist_ok=True)
+    out_path = user_dir / f"{out_basename}.mp4"
     # 避免覆盖同名文件（例如同一秒内连续提交）
     suffix = 1
     while out_path.exists():
@@ -1173,7 +1284,9 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
 
     job_id = f"job_{ts}_{os.getpid()}_{uuid4().hex[:6]}"
     merge_token = uuid4().hex
-    job = SliceJob(id=job_id, source="multiple", status="queued", out_path=str(out_path.name))
+    # 存储相对于 OUTPUT_DIR 的路径，方便前端展示
+    rel_out = _rel_output_path(out_path)
+    job = SliceJob(id=job_id, source="multiple", status="queued", out_path=rel_out)
     JOBS[job_id] = job
 
     # ---- 全局并发限制 + 持久化写入 running 状态（同一把锁，避免竞争） ----
@@ -1185,6 +1298,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
             if eta_human:
                 msg = f"{msg}（预计剩余：{eta_human}）"
             raise HTTPException(status_code=409, detail=msg)
+        # record the output path relative to whichever base currently holds it
         state = {
             "running": True,
             "job_id": job_id,
@@ -1192,7 +1306,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
             "username": username,
             "status": "running",
             "started_at": int(time.time()),
-            "out_file": str(out_path.name),
+            "out_file": _rel_output_path(out_path),
             "stage": "queued",
             "total_clips": int(total_clips),
             "done_clips": 0,
@@ -1399,24 +1513,41 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
                 if _merge_cancel_event.is_set():
                     raise MergeCancelled("用户取消合并")
                 
-                # ----------------- 源文件版本替换逻辑 -----------------
+                # ----------------- 源文件版本替换逻辑（新版目录结构） -----------------
                 target_name = vid.name
-                p_name = Path(target_name)
-                if p_name.name.startswith(PREVIEW_PREFIX):
-                    bare_name = p_name.name[len(PREVIEW_PREFIX):]
-                    if body.source_mode == "original":
-                        prefix = ""
-                    elif body.source_mode == "encode":
-                        prefix = ENCODE_PREFIX
+                # 如果前端传来的路径没带“括弧笑bilibili/压制版”，补上它以便后续替换逻辑生效
+                if target_name and not target_name.startswith("括弧笑bilibili"):
+                    if target_name.startswith("压制版") or target_name.startswith("原版"):
+                        target_name = "括弧笑bilibili/" + target_name
+                    else:
+                        target_name = "括弧笑bilibili/压制版/" + target_name
+                
+                p = Path(target_name)
+
+                if p.name.startswith(PREVIEW_PREFIX):
+
+                    bare_name = p.name[len(PREVIEW_PREFIX):]  # 去掉“预览版-”
+                    parts = list(p.parts)  # ['括弧笑bilibili','压制版','2026','02','22','预览版-1.mp4']
+
+                    if body.source_mode == "encode":
+                        # 压制版目录保持不变，只替换文件名前缀
+                        new_filename = ENCODE_PREFIX + bare_name
+                        new_path = Path(*parts).parent / new_filename
+
+                    elif body.source_mode == "original":
+                        # 目录结构: 括弧笑bilibili/压制版/... -> 括弧笑bilibili/原版/...
+                        if parts and len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
+                            parts[1] = "原版"
+                        else:
+                            raise HTTPException(400, f"无法识别压制版目录结构: {vid.name}")
+
+                        new_filename = bare_name  # 原版没有前缀
+                        new_path = Path(*parts).parent / new_filename
+
                     else:
                         raise HTTPException(400, f"unsupported source_mode: {body.source_mode}")
-                    new_filename = prefix + bare_name
-                    # 保持原有目录结构
-                    if str(p_name.parent) == ".":
-                         target_name = new_filename
-                    else:
-                         target_name = str(p_name.parent / new_filename).replace("\\", "/")
-                
+
+                    target_name = str(new_path).replace("\\", "/")
                 src = sanitize_name(target_name)
                 if not src.exists():
                     raise FileNotFoundError(f"找不到源文件 (模式: {body.source_mode}): {target_name}")
@@ -1425,7 +1556,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
                         raise MergeCancelled("用户取消合并")
                     if clip.end <= clip.start:
                         raise ValueError(f"Clip end <= start in {vid.name}")
-                    tmp = OUTPUT_DIR / f"{job.id}_{vid_idx}_{i}.ts"
+                    tmp = TMP_OUTPUT_DIR / f"{job.id}_{vid_idx}_{i}.ts"
                     # 先加入清理列表：避免取消/失败发生在 temp_files.append 之前导致残留
                     if tmp not in temp_files:
                         temp_files.append(tmp)
@@ -1494,7 +1625,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
                         percent=_safe_percent(processed_seconds),
                     )
             
-            list_file = OUTPUT_DIR / f"{job.id}_list.txt"
+            list_file = TMP_OUTPUT_DIR / f"{job.id}_list.txt"
             with list_file.open("w", encoding="utf-8") as f:
                 for tmp in temp_files:
                     f.write(f"file '{tmp.name}'\n")
@@ -1509,13 +1640,33 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
             _run_ffmpeg_concat_with_cancel(cmd_concat)
             job.status = "done"
 
+            # ---------- new feature: relocate merged result to finished directory ----------
+            try:
+                dest_base = FINISHED_DIR
+                dest_base.mkdir(parents=True, exist_ok=True)
+                try:
+                    rel = out_path.relative_to(OUTPUT_DIR)
+                except Exception:
+                    rel = out_path.name
+                dest = dest_base / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(out_path), str(dest))
+                out_path = dest
+            except Exception:
+                # moving is best-effort; failure should not break the job
+                pass
+
+            # compute the path string that will be sent to frontend
+            rel_out = _rel_output_path(out_path)
+            job.out_path = rel_out
+
             _update_merge_state(
                 running=False,
                 status="done",
                 stage="done",
                 current=None,
                 finished_at=int(time.time()),
-                out_file=str(out_path.name),
+                out_file=rel_out,
                 percent=1.0,
                 error=None,
             )
@@ -1543,7 +1694,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
                     stage="error",
                     current=None,
                     finished_at=int(time.time()),
-                    out_file=str(out_path.name),
+                    out_file=str(out_path.relative_to(OUTPUT_DIR)),
                     percent=_safe_percent(processed_seconds),
                     error=str(e),
                 )
@@ -1574,9 +1725,9 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
 
             # 兜底：按 job_id 模式把可能遗漏的临时文件也删掉（例如取消发生在写入列表之前）
             try:
-                for p in OUTPUT_DIR.glob(f"{job.id}_*.ts"):
+                for p in TMP_OUTPUT_DIR.glob(f"{job.id}_*.ts"):
                     cleanup_targets.append(p)
-                for p in OUTPUT_DIR.glob(f"{job.id}_list.txt"):
+                for p in TMP_OUTPUT_DIR.glob(f"{job.id}_list.txt"):
                     cleanup_targets.append(p)
             except Exception:
                 pass
@@ -1611,9 +1762,10 @@ async def job_status(job_id: str):
         raise HTTPException(404, "Job not found")
     return job.model_dump()
 
-@app.get("/clips/{name}")
+@app.get("/clips/{name:path}")
 async def get_clip(name: str):
-    path = OUTPUT_DIR / name
+    # sanitize and ensure file is under OUTPUT_DIR (username subfolders supported)
+    path = sanitize_output_name(name)
     if not path.exists():
         raise HTTPException(404, "Clip not found")
     _increment_stat("download_count")
@@ -1645,9 +1797,13 @@ async def delete_output(body: DeleteOutputRequest = Body(...)):
     return {"ok": True, "deleted": True}
 
 
-@app.get("/api/check_file/{name}")
+@app.get("/api/check_file/{name:path}")
 async def check_file(name: str):
-    """检查输出文件是否存在"""
+    """检查输出文件是否存在
+
+    "path" 参数允许包含斜杠，这样客户端传入诸如
+    "成品/用户名/xxx.mp4" 的值时不会因为路由不匹配而返回 404。
+    参数仍然会经过 `sanitize_output_name` 验证。"""
     try:
         path = sanitize_output_name(name)
         exists = path.exists() and path.is_file()
@@ -1734,10 +1890,11 @@ async def upload_bili(
              return {"success": False, "message": "封面图片大小不能超过 5MB"}
 
         try:
-            # 使用 UUID 生成唯一临时文件名，保存到 OUTPUT_DIR 下（便于清理）
+            # 使用 UUID 生成唯一临时文件名，保存到 COVER_DIR 下以便集中管理
+            COVER_DIR.mkdir(parents=True, exist_ok=True)
             ext = Path(cover.filename).suffix if cover.filename else ".jpg"
             cover_temp_name = f"cover_{uuid4().hex}{ext}"
-            cover_path = OUTPUT_DIR / cover_temp_name
+            cover_path = COVER_DIR / cover_temp_name
             with cover_path.open("wb") as f:
                 shutil.copyfileobj(cover.file, f)
             cover_path_str = str(cover_path)
@@ -1746,8 +1903,8 @@ async def upload_bili(
 
     # 构建将要执行的命令
     cmd = [
-        "/rec/app/apps/biliup",
-        "-u", "/rec/app/cookies/bilibili/cookies-烦心事远离.json",
+        "/rec/biliup/biliup",
+        "-u", "/rec/cookies/bilibili/cookies-烦心事远离.json",
         "upload",
         "--copyright", "2",
         "--source", "https://live.bilibili.com/1962720",
