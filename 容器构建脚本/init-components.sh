@@ -69,7 +69,7 @@ chmod +x /root/BililiveRecorder/BililiveRecorder.Cli
 # 创建相关目录
 mkdir -p /opt/bililive/config /opt/bililive/scripts /opt/bililive/biliup /opt/webclip /opt/webclip/static /opt/webclip/templates
 # 下载视频处理相关脚本
-wget -O /opt/bililive/config/上传备份脚本配置文件.conf https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/上传备份脚本配置文件.conf
+wget -O /opt/bililive/config/config.conf https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/config.conf
 wget -O /opt/bililive/scripts/录播上传备份脚本.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/录播上传备份脚本.sh
 wget -O /opt/bililive/scripts/压制视频.py https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/压制视频.py
 wget -O /opt/bililive/scripts/封面获取.py https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/封面获取.py

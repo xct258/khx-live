@@ -7,7 +7,6 @@ services:
       XCT258_GITHUB_TOKEN: ""      # github的token，用于下载配置文件
       Bililive_USER: "xct258"      # 录播姬默认用户名
       Bililive_PASS: "xct258"      # 录播姬默认随机密码
-      ENABLE_WEBCLIP: "false"      # 是否启用在线切片服务，默认为 false，端口8186
     volumes:
       - ./data:/rec
     restart: always

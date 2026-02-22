@@ -5,7 +5,7 @@ set -x
 source_backup="/rec"
 
 # 读取配置文件
-source /rec/上传备份脚本配置文件.conf
+source /rec/config.conf
 
 # 定义需要检查的库及其apt包名
 declare -A libraries

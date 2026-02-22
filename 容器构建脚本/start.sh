@@ -7,8 +7,8 @@ mkdir -p /rec/apps
 mkdir -p /rec/在线切片
 
 # 配置文件单独处理
-if [ ! -f /rec/上传备份脚本配置文件.conf ]; then
-    cp /opt/bililive/config/上传备份脚本配置文件.conf /rec/
+if [ ! -f /rec/config.conf ]; then
+    cp /opt/bililive/config/config.conf /rec/config.conf
 fi
 
 # 在线切片安装
@@ -130,7 +130,7 @@ fi
 /root/BililiveRecorder/BililiveRecorder.Cli run --bind "http://*:2356" --http-basic-user "$Bililive_USER" --http-basic-pass "$Bililive_PASS" "/rec/录播姬" > /dev/null 2>&1 &
 
 # 检查 Bililive 是否启动成功
-sleep 2
+sleep 4
 if ! pgrep -f "BililiveRecorder.Cli" > /dev/null; then
   echo "------------------------------------"
   echo "$(date)"
@@ -157,21 +157,12 @@ fi
 #fi
 
 
-# 在线切片服务（app.py 应在 /rec/在线切片）
-# 由环境变量 ENABLE_WEBCLIP 决定是否启动，端口可通过 WEBCLIP_PORT 调整，默认 8186
-if [ "${ENABLE_WEBCLIP}" = "true" ] && [ -f /rec/在线切片/app.py ]; then
-    echo "启动在线切片服务..."
-    port="${WEBCLIP_PORT:-8186}"
-    uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
-fi
-
 # 创建并启动每日视频上传备份定时任务
 SCHEDULER_SCRIPT="/usr/local/bin/执行视频备份脚本.sh"
-
 cat << 'EOF' > "$SCHEDULER_SCRIPT"
 #!/bin/bash
 
-CONFIG_FILE="/rec/上传备份脚本配置文件.conf"
+CONFIG_FILE="/rec/config.conf"
 DEFAULT_SLEEP_TIME="02:00"
 
 while true; do
@@ -215,6 +206,21 @@ EOF
 
 chmod +x "$SCHEDULER_SCRIPT"
 "$SCHEDULER_SCRIPT" &
+
+# 创建webclip在线切片服务的定时任务
+WEBCLIP_SCHEDULER_SCRIPT="/usr/local/bin/在线切片启动脚本.sh"
+cat << 'EOF' > "$WEBCLIP_SCHEDULER_SCRIPT"
+#!/bin/bash
+CONFIG_FILE="/rec/config.conf"
+source "$CONFIG_FILE"
+if [[ "$ENABLE_WEBCLIP" = "true" ]] && [[ -f "/rec/在线切片/app.py" ]]; then
+  echo "启动在线切片服务..."
+  port="${WEBCLIP_PORT:-8186}"
+  uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
+fi
+EOF
+chmod +x "$WEBCLIP_SCHEDULER_SCRIPT"
+"$WEBCLIP_SCHEDULER_SCRIPT" &
 
 # 输出账户信息
 echo "------------------------------------"

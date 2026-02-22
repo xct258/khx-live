@@ -19,8 +19,7 @@
    `/opt/bililive/scripts` 下存放了一套 FFmpeg 自动处理、封面获取、日志记录等实用 shell/python 脚本，镜像初始化时会同步到 `/rec/脚本`，方便用户自定义任务（例如上传/压制等）。
 
 4. **在线切片 Web 服务（可选）**  
-   简易的 FastAPI 应用，可在浏览器中预览 `/rec/录播姬` 下的视频并进行时间段裁剪。服务代码部署在 `/opt/webclip`，启动时由 `ENABLE_WEBCLIP` 环境变量控制。
-
+   简易的 FastAPI 应用，可在浏览器中预览 `/rec/录播姬` 下的视频并进行时间段裁剪。服务代码部署在 `/opt/webclip`，启用状态由宿主挂载目录下的配置文件 `/rec/config.conf` 控制，编辑后重启容器以使改动生效。
 5. **字体与工具支持**  
    自动下载 Segoe Emoji、微软雅黑等字体以保证弹幕与字幕渲染，内置 7zz 解压、rclone、DanmakuFactory 等小工具。
 
@@ -54,9 +53,7 @@
        -e XCT258_GITHUB_TOKEN="<your token>" \
        -e Bililive_USER="xct258" \
        -e Bililive_PASS="<password>" \
-       -e ENABLE_WEBCLIP=true \
-       -e WEBCLIP_PORT=8186 \
-       -p 8186:8186 \
+       -p 8186:8186 \ # 若使用在线切片，请映射端口
        -v /path/to/data:/rec \
        xct258/khx-live
    ```
@@ -81,8 +78,6 @@
 | `XCT258_GITHUB_TOKEN`    | GitHub 私有仓库访问令牌，用于下载敏感配置文件   | 空          | `abc123...`      |
 | `Bililive_USER`          | 录播姬 HTTP Basic 用户名                        | `xct258`    | `myuser`         |
 | `Bililive_PASS`          | 录播姬 HTTP Basic 密码                          | 随机生成    | `S7f9kLm0`       |
-| `ENABLE_WEBCLIP`         | 是否启用在线切片 Web 应用                      | `false`     | `true`/`false`   |
-| `WEBCLIP_PORT`           | 在线切片监听端口                                | `8186`      | `8080`           |
 
 ---
 
@@ -103,7 +98,7 @@ GitHub Actions 工作流配置在 `.github/workflows/docker-image.yml`：
 
 1. **录播姬无法启动**：检查容器日志 `docker logs khx-live` 是否有权限或缺少 `BililiveRecorder.Cli`。
 2. **视频文件未出现在 `/rec`**：确认宿主路径正确挂载，并且容器具有写权限。
-3. **在线切片访问失败**：确认 `ENABLE_WEBCLIP` 已设为 `true`，端口映射正确，并且 `/rec/在线切片/app.py` 存在。
+3. **在线切片访问失败**：确认 `/rec/config.conf` 中已设置 `ENABLE_WEBCLIP=true`，端口映射正确，并且 `/rec/在线切片/app.py` 存在。
 4. **私有配置下载失败**：检查 `XCT258_GITHUB_TOKEN` 是否有效，容器网络是否可访问 GitHub。
 
 ---

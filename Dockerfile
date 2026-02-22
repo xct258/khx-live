@@ -27,6 +27,6 @@ RUN apt update \
     # 赋予启动脚本执行权限
     && chmod +x /usr/local/bin/start.sh
 
-# 若要启动在线切片服务，请在容器运行时指定环境变量 ENABLE_WEBCLIP=true 并映射相应端口
+# 若要启动在线切片服务，请在宿主目录的 `/rec/config.conf` 中设置 ENABLE_WEBCLIP=true 并映射相应端口。环境变量方式已废弃。
 # 设置容器启动时执行的命令
 ENTRYPOINT ["/usr/local/bin/start.sh"]
