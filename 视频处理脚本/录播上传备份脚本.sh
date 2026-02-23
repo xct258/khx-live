@@ -390,9 +390,20 @@ for cache_dir in "${sorted_cache_dirs[@]}"; do
       biliup_cover_image=$(python3 /rec/脚本/封面获取.py "$cache_dir")
       log info "获取封面图片路径：$biliup_cover_image"
 
+      # === 新增：检测封面文件是否存在 ===
+      cover_args=() # 初始化一个空数组
+      if [[ -f "$biliup_cover_image" ]]; then
+          log info "封面文件存在，已添加封面参数。"
+          cover_args=("--cover" "$biliup_cover_image")
+      else
+          log info "封面文件不存在或路径无效，跳过封面上传。"
+      fi
+      # ==================================
+
+      # 在命令中使用 "${cover_args[@]}" 动态展开参数
       biliup_upload_output=$("$source_backup/biliup/biliup" -u "${biliup_up_cookies}" upload \
         --copyright 2 \
-        --cover "$biliup_cover_image" \
+        "${cover_args[@]}" \
         --source https://live.bilibili.com/1962720 \
         --tid 17 \
         --title "$upload_title_1" \
