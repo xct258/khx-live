@@ -36,8 +36,16 @@ chmod +x /root/tmp/7zz
 mv /root/tmp/7zz /bin/7zz
 
 # 安装该镜像所需要的软件
-apt install -y ffmpeg pciutils fontconfig procps rclone python3 python3-pip
+apt install -y ffmpeg pciutils fontconfig procps rclone python3 python3-pip python3-numpy python3-matplotlib python3-scipy
 pip install fastapi uvicorn[standard] jinja2 pydantic python-multipart --break-system-packages
+
+# 安装intel核显驱动
+apt update
+apt install -y gpg wget
+wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
+echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
+apt update
+apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
 
 # 安装该镜像所需要的字体
 # 创建字体目录

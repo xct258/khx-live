@@ -514,4 +514,36 @@ for cache_dir in "${sorted_cache_dirs[@]}"; do
     --data-urlencode "content=$message" \
   >/dev/null
 done
+# 自动清理旧视频
+if [[ "$ENABLE_CLEANUP" == "true" ]]; then
+  log info "开始清理超过 ${RETENTION_DAYS} 天的旧视频目录..."
+  
+  # 获取当前系统时间戳
+  now_seconds=$(date +%s)
+  # 计算保留阈值的秒数 (天数 * 24 * 3600)
+  retention_seconds=$((RETENTION_DAYS * 86400))
+
+  # 查找特定目录下（压制版或源文件）符合 YYYY-MM-DD 格式的日期目录
+  # 使用 -path 确保只匹配 /videos/*/压制版/... 或 /videos/*/源文件/... 下的文件夹
+  find "${source_backup}/videos" -type d \( -path "*/压制版/*" -o -path "*/源文件/*" \) -name "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" | while read -r dir_path; do
+    # 提取文件夹名作为日期字符串
+    dir_name=$(basename "$dir_path")
+    
+    # 将文件夹日期转换为时间戳
+    if dir_seconds=$(date -d "$dir_name" +%s 2>/dev/null); then
+      # 计算差异
+      diff_seconds=$((now_seconds - dir_seconds))
+      
+      if [[ "$diff_seconds" -gt "$retention_seconds" ]]; then
+        log info "检测到过期目录: $dir_path (日期: $dir_name)，执行删除"
+        rm -rf "$dir_path"
+      fi
+    fi
+  done
+
+  # 清理可能产生的空父目录 (Year/Month)
+  find "${source_backup}/videos" -type d -empty -delete
+  log success "旧视频清理完成"
+fi
+
 log info "脚本执行完毕"
