@@ -5,7 +5,8 @@ mkdir -p /rec/录播姬
 mkdir -p /rec/脚本
 mkdir -p /rec/apps
 mkdir -p /rec/在线切片
-
+mkdir -p /rec/在线切片/static
+mkdir -p /rec/在线切片/templates
 # 配置文件单独处理
 if [ ! -f /rec/config.conf ]; then
     cp /opt/bililive/config/config.conf /rec/config.conf
