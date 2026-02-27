@@ -473,12 +473,13 @@ else
       # 清理临时文件
       # =============================
       if [ -d "$cache_dir" ]; then
-        if find "$cache_dir" -type f ! -name "*.txt" -print -quit | grep -q .; then
-          log warn "存在非txt文件，保留临时文件以备检查：${cache_dir}"
+        # 找到第一个不符合条件的文件并赋值给变量
+        unexpected_file=$(find "$cache_dir" -type f ! -iname "*.log" ! -iname "*.jpg" -print -quit)
+        if [ -n "$unexpected_file" ]; then
+          log warn "检测到异常文件 [$(basename "$unexpected_file")]，跳过清理：${cache_dir}"
         else
-          log info "仅剩txt文件或目录为空，清理临时文件"
+          log info "清理目录：${cache_dir}"
           rm -rf "$cache_dir"
-          log info "清理完成：临时文件已删除"
         fi
       fi
     fi
