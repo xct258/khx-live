@@ -8,7 +8,7 @@ readonly _LOG_LOADED=1
 # 设置 _LOG_LOADED 为只读变量并赋值为1，标记脚本已加载
 
 # 日志保留数量
-_log_max_files=5
+_log_max_files=30
 # 设置最大保留日志文件数为5，超过的旧日志将被删除
 
 # 默认日志目录：支持外部通过 LOG_BASE_DIR 环境变量指定
