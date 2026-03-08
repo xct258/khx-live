@@ -34,8 +34,6 @@ CONFIG = {
         # 预览版规格
         'PREVIEW_HEIGHT': 480,      # 分辨率高度 (P)
         'PREVIEW_FPS': 24,          # 帧率 (FPS)
-        # 目标输出帧率，用于与 B 站二压对齐
-        'TARGET_FPS': 30,
     },
     
     # 输出文件名前缀
@@ -464,9 +462,6 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
                 args.extend(['-global_quality', CONFIG['ENCODE']['QSV_QUALITY'], 
                              '-preset', CONFIG['ENCODE']['QSV_PRESET']])
         
-        # 强制输出帧率以匹配目标站点（避免二压抽帧导致弹幕跳动）
-        args.extend(['-r', str(CONFIG['ENCODE']['TARGET_FPS']), '-vsync', '2'])
-        
         # 音频处理
         if is_preview:
             # 预览版本大幅降低音频码率
@@ -791,18 +786,11 @@ def main(xml_file, mode='both', danmaku_factory='/rec/apps/DanmakuFactory',
             # 解析XML文件，提取弹幕数据
             bullet_data = parse_bullet_xml(xml_file)
             
-            # 根据XML文件路径生成视频文件路径，优先查找 mp4，否则尝试 flv
-            base = os.path.splitext(xml_file)[0]
-            if os.path.exists(base + '.mp4'):
-                video_file = base + '.mp4'
-            elif os.path.exists(base + '.flv'):
-                video_file = base + '.flv'
-            else:
-                # 默认仍使用 mp4 扩展名，如果文件不存在后续会报错
-                video_file = base + '.mp4'
+            # 根据XML文件路径生成视频文件路径
+            video_file = os.path.splitext(xml_file)[0] + '.mp4'
 
             # 根据XML文件路径生成ass文件路径
-            ass_file = base + '.ass'
+            ass_file = os.path.splitext(xml_file)[0] + '.ass'
             
             # 总是重新转换 ASS 文件
             convert_xml_to_ass(xml_file, danmaku_factory, font_size, opacity, log_file=log_file)
