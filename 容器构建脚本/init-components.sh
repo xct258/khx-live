@@ -36,8 +36,25 @@ chmod +x /root/tmp/7zz
 mv /root/tmp/7zz /bin/7zz
 
 # 安装该镜像所需要的软件
-apt install -y ffmpeg pciutils fontconfig procps rclone python3 python3-pip python3-numpy python3-matplotlib python3-scipy
-pip install fastapi uvicorn[standard] jinja2 pydantic python-multipart --break-system-packages
+apt install -y \
+    ffmpeg \
+    pciutils \
+    fontconfig \
+    procps \
+    rclone \
+    python3 \
+    python3-pip
+
+pip install \
+    numpy \
+    matplotlib \
+    scipy \
+    fastapi \
+    uvicorn[standard] \
+    jinja2 \
+    pydantic \
+    python-multipart \
+    --break-system-packages
 
 # 安装intel核显驱动
 apt update
