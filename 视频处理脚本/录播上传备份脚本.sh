@@ -20,68 +20,11 @@ generate_upload_desc() {
   local stream_title="$1"
   local formatted_start_time_2="$2"
 
-  echo "直播间标题：$stream_title
-录制平台：$recording_platform
-
-括弧笑频道主页：
-bilibili
-顶级尼鸡塔结晶
-https://space.bilibili.com/296620370
-高机动持盾军官
-https://space.bilibili.com/32223456
-acfun
-蘑菇的括弧笑
-https://www.acfun.cn/u/12909228
-鬼屋神狙会
-https://www.acfun.cn/u/73177808
-youtube
-蘑菇的刮弧笑
-https://www.youtube.com/@蘑菇的刮弧笑
-
-括弧笑直播间地址：
-bilibili
-https://live.bilibili.com/1962720
-
-使用录播姬和biliup录制上传，有问题请站内私信联系xct258
-https://space.bilibili.com/33235987
-
-项目地址：
-https://github.com/xct258/khx-live
-
-非常感谢录播姬和biliup项目
-录播姬
-https://github.com/BililiveRecorder/BililiveRecorder
-biliup
-https://github.com/biliup/biliup"
-}
-
-# 处理上传成功的状态的函数
-handle_upload_status() {
-  local upload_success="$1"
-  local streamer_name="$2"
-  local start_time="$3"
-  local remote_name="$4"
-  local free_gb="$5"
-
-  if $upload_success; then
-    echo "${server_name}
-
-${streamer_name}
-${start_time}场
-
-视频上传成功
-备份网盘: 
-${remote_name}
-剩余空间: 
-${free_gb}GB"
-  else
-    echo "${server_name}
-
-${streamer_name}
-${start_time}场
-
-脚本执行失败！，请检查⚠"
-  fi
+  # 使用配置中的模板并替换占位符
+  # {title} 为直播标题，{platform} 为录制平台
+  echo "$UPLOAD_DESC_TEMPLATE" | sed \
+    -e "s/{title}/$stream_title/g" \
+    -e "s/{platform}/$recording_platform/g"
 }
 
 # 引入日志函数库
@@ -139,7 +82,7 @@ else
 
     # --- 第一阶段：极速清理小视频及其关联 XML ---
     # 【核心修复】仅依赖 find 的 -size -10M 参数，直接读取底层文件系统元数据，零 I/O 负担
-    find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" -o -name "*.ts" \) -size -10M -print0 |
+    find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -size -10M -print0 |
     while IFS= read -r -d '' video; do
         log info "视频过小 (<10MB): $video，执行清理"
         base_path="${video%.*}"
@@ -155,7 +98,7 @@ else
     # --- 第二阶段：重新读取有效文件路径，并提取元数据 ---
     # 清理完小垃圾文件后，重新获取剩余的真实有效文件列表
     # mapfile (或 readarray) 能够绝对安全地处理带空格等特殊字符的文件名
-    mapfile -t input_files < <(find "$dir" -type f \( -name "*.ts" -o -name "*.flv" -o -name "*.mp4" -o -name "*.xml" \) | sort)
+    mapfile -t input_files < <(find "$dir" -type f \( -name "*.flv" -o -name "*.mp4" -o -name "*.xml" \) | sort)
 
     # 【重要保护】如果清理小文件后，目录变空了，直接删除目录并跳过后续逻辑
     if [[ ${#input_files[@]} -eq 0 ]]; then
@@ -199,7 +142,15 @@ else
                 log info "移动文件: $file"
                 mv "$file" "$cache_dir/" || upload_success=false
                 ;;
-            flv|ts)
+            flv)
+                # 如果配置禁用转换，则直接移动原文件
+                if [[ "$CONVERT_FLV_TO_MP4" != "true" ]]; then
+                    log info "配置禁用 flv 转换，直接移动原文件: $file"
+                    mv "$file" "$cache_dir/" || upload_success=false
+                    continue
+                fi
+
+                # 需要转换为 mp4
                 output_file="$cache_dir/${filename}.mp4"
                 log info "转换视频: $file -> $output_file"
                 # 使用 copy 模式极速封转，-loglevel error 避免输出过多无用日志
@@ -207,8 +158,14 @@ else
                     rm -f "$file"
                     log success "转换成功并清理源文件"
                 else
-                    log error "转换失败：$file"
-                    upload_success=false
+                    log error "转换失败：$file，保留原视频并使用原文件"
+                    # 转换失败时直接使用原视频，将其移动到缓存目录
+                    if mv "$file" "$cache_dir/"; then
+                        log info "转换失败，已将原文件移动到缓存目录：$cache_dir"
+                    else
+                        log error "无法移动原视频到缓存目录：$file"
+                        upload_success=false
+                    fi
                 fi
                 ;;
         esac
@@ -309,75 +266,75 @@ else
         # 示例：录播姬_2024年12月01日22点13分_暗区最穷_高机动持盾军官
 
         if [[ "$streamer_name" == "括弧笑bilibili" && " ${update_servers[*]} " == *" $recording_platform "* ]]; then
-          if [[ "$filename" == *.mp4 ]]; then
-            if [[ "$filename" == 投稿版-* ]]; then
-              log info "检测到投稿版视频，跳过弹幕压制"
-              compressed_files+=("${cache_dir}/${filename}")
-              original_files+=("${cache_dir}/${filename}")
-            else
-              xml_file="${filename_no_ext}.xml"
-              ass_file="${filename_no_ext}.ass"
-              output_file="投稿版-${filename_no_ext}.mp4"
-              if [[ -f "${cache_dir}/${xml_file}" ]]; then
-                # 检查 XML 是否包含有效弹幕（通过匹配<d，<sc，<gift，<guard开头的行）
-                if grep -aEq '^\s*<(d|sc|gift|guard)' "${cache_dir}/${xml_file}"; then
-                  log info "检测到有效弹幕文件，开始弹幕压制：${cache_dir}"
+          ext="${filename##*.}"
+          if [[ "$filename" == 投稿版-* ]]; then
+            log info "检测到投稿版视频，跳过弹幕压制"
+            compressed_files+=("${cache_dir}/${filename}")
+            original_files+=("${cache_dir}/${filename}")
+          else
+            xml_file="${filename_no_ext}.xml"
+            ass_file="${filename_no_ext}.ass"
+            output_file="投稿版-${filename_no_ext}.mp4"
+            if [[ -f "${cache_dir}/${xml_file}" ]]; then
+              # 检查 XML 是否包含有效弹幕（通过匹配<d，<sc，<gift，<guard开头的行）
+              if grep -aEq '^\s*<(d|sc|gift|guard)' "${cache_dir}/${xml_file}"; then
+                log info "检测到有效弹幕文件，开始弹幕压制：${cache_dir}"
 
-                  # 检查 Intel 显卡驱动安装
-                  if lspci | grep -i "VGA\|Display" | grep -i "Intel Corporation" > /dev/null; then
-                    if ! vainfo > /dev/null 2>&1; then
-                      log info "检测到Intel显卡驱动未安装，开始安装..."
-                      apt update
-                      apt install -y gpg wget
-                      wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
-                      echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
-                      apt update
-                      apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
-                      log success "Intel显卡驱动安装完成"
+                # 检查 Intel 显卡驱动安装
+                if lspci | grep -i "VGA\|Display" | grep -i "Intel Corporation" > /dev/null; then
+                  if ! vainfo > /dev/null 2>&1; then
+                    log info "检测到Intel显卡驱动未安装，开始安装..."
+                    apt update
+                    apt install -y gpg wget
+                    wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
+                    echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
+                    apt update
+                    apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
+                    log success "Intel显卡驱动安装完成"
+                  fi
+                fi
+
+                for lib in "${!libraries[@]}"; do
+                  if ! python3 -c "import $lib" &> /dev/null; then
+                    if apt install -y "${libraries[$lib]}"; then
+                      log success "安装Python库 ${libraries[$lib]} 成功"
+                    else
+                      log error "安装Python库 ${libraries[$lib]} 失败"
+                      upload_success=false
                     fi
                   fi
-
-                  for lib in "${!libraries[@]}"; do
-                    if ! python3 -c "import $lib" &> /dev/null; then
-                      if apt install -y "${libraries[$lib]}"; then
-                        log success "安装Python库 ${libraries[$lib]} 成功"
-                      else
-                        log error "安装Python库 ${libraries[$lib]} 失败"
-                        upload_success=false
-                      fi
-                    fi
-                  done
-                  if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
-                    log warn "已禁用弹幕压制，跳过压制"
-                    compressed_files+=("${cache_dir}/${filename}")  # 直接添加原视频路径
-                  else
-                    if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}"; then
-                      if [[ -f "${cache_dir}/${output_file}" ]]; then
-                        log success "视频弹幕压制完成：$output_file"
-                        compressed_files+=("${cache_dir}/${output_file}")
-                      else
-                        log error "压制脚本执行成功但未生成目标文件，使用原视频：$filename"
-                        compressed_files+=("${cache_dir}/${filename}")
-                      fi
+                done
+                # 如果未启用弹幕压制或者关闭了 flv->mp4 转换，视为禁用弹幕压制
+                if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" || "$CONVERT_FLV_TO_MP4" != "true" ]]; then
+                  log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY CONVERT_FLV_TO_MP4=$CONVERT_FLV_TO_MP4），跳过压制"
+                  compressed_files+=("${cache_dir}/${filename}")  # 直接添加原视频路径
+                else
+                  if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}"; then
+                    if [[ -f "${cache_dir}/${output_file}" ]]; then
+                      log success "视频弹幕压制完成：$output_file"
+                      compressed_files+=("${cache_dir}/${output_file}")
                     else
-                      log error "视频弹幕压制失败：$output_file"
+                      log error "压制脚本执行成功但未生成目标文件，使用原视频：$filename"
                       compressed_files+=("${cache_dir}/${filename}")
                     fi
-                    original_files+=("${cache_dir}/${filename}")
+                  else
+                    log error "视频弹幕压制失败：$output_file"
+                    compressed_files+=("${cache_dir}/${filename}")
                   fi
-                else
-                  log warn "弹幕文件内容为空或不符合预期，跳过弹幕压制：${cache_dir}/${xml_file}"
-                  # 添加视频到数组
-                  compressed_files+=("${cache_dir}/${filename}")
+                  original_files+=("${cache_dir}/${filename}")
                 fi
               else
-                log warn "未检测到弹幕 XML 文件，跳过弹幕压制：${cache_dir}/${xml_file}"
+                log.warn "弹幕文件内容为空或不符合预期，跳过弹幕压制：${cache_dir}/${xml_file}"
                 # 添加视频到数组
                 compressed_files+=("${cache_dir}/${filename}")
               fi
-              # 同时将原始视频文件添加到原始文件数组
-              original_files+=("${cache_dir}/${filename}")
+            else
+              log.warn "未检测到弹幕 XML 文件，跳过弹幕压制：${cache_dir}/${xml_file}"
+              # 添加视频到数组
+              compressed_files+=("${cache_dir}/${filename}")
             fi
+            # 同时将原始视频文件添加到原始文件数组
+            original_files+=("${cache_dir}/${filename}")
           fi
         fi
       else
@@ -515,16 +472,6 @@ else
         fi
       fi
     fi
-
-    # 发送上传结果消息
-    message=$(handle_upload_status "$upload_success" "$streamer_name" "$start_time" "$rclone_onedrive_config" "$rclone_onedrive_free_gb")
-    # 推送消息命令
-    curl -s -X POST "https://msgpusher.xct258.top/push/root" \
-      --data-urlencode "title=直播录制" \
-      --data-urlencode "description=直播录制" \
-      --data-urlencode "channel=一般通知" \
-      --data-urlencode "content=$message" \
-    >/dev/null
   done
 fi
 
