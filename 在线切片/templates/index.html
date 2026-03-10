@@ -25,56 +25,150 @@
             </div>
             <div class="site-intro-body">
                 <div style="opacity:0.9; font-size:13px; line-height:1.6;">
+
                     <!-- 1. 工具简介 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📌 工具简介
-                    </div>
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📌 工具简介</div>
                     <div style="margin:0 0 14px 10px;">
-                        这是一个专为括弧笑直播回放设计的<strong>视频合并工具</strong>，支持从多个视频中提取精彩片段并合并为一个完整视频，所有代码均使用AI生成，如有bug欢迎私信反馈。
+                        这是一个专为括弧笑直播回放设计的<strong>在线视频切片工具</strong>，支持从多个视频中提取精彩片段并合并为一个完整视频。所有代码均使用 AI 生成，如有 bug 欢迎私信反馈。
                     </div>
+
                     <!-- 2. 快速上手 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🚀 快速上手
-                    </div>
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🚀 快速上手（5 步完成切片）</div>
                     <ol style="margin:0 0 14px 18px; padding:0;">
-                        <li><strong>选择视频</strong>：首先需要选择视频文件</li>
-                        <li><strong>预览</strong>：点击"预览"按钮加载视频</li>
-                        <li><strong>标记片段</strong>：播放到目标位置后，使用 <code>Q</code> 设定起点，<code>W</code> 设定终点</li>
-                        <li><strong>添加片段</strong>：点击"确认添加片段"或按 <code>C</code></li>
-                        <li><strong>合并</strong>：重复上述步骤添加多个片段，最后输入用户名并点击"开始合并"</li>
+                        <li><strong>选择视频</strong> — 点击左侧"选择视频"按钮，在文件树中选择目标视频</li>
+                        <li><strong>加载预览</strong> — 选择后点击"预览"按钮加载视频画面</li>
+                        <li><strong>定位 &amp; 标记</strong> — 播放视频，找到目标位置后按 <code>Q</code>&thinsp;设起点、按 <code>W</code>&thinsp;设终点（自动添加片段）</li>
+                        <li><strong>重复添加</strong> — 继续标记更多片段，支持跨视频选取</li>
+                        <li><strong>开始合并</strong> — 填写用户名，点击"开始合并"等待输出</li>
                     </ol>
 
-                    <!-- 3. 完整快捷键 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⌨️ 完整快捷键
+                    <!-- 3. 核心概念：锚点与播放头 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🎯 核心概念：锚点与播放头</div>
+                    <div style="margin:0 0 6px 10px; font-size:12px;">
+                        本工具采用<strong>双指针</strong>交互设计，理解这两个概念是高效操作的关键：
+                    </div>
+                    <div style="margin:0 0 4px 10px; padding:8px 10px; background:rgba(255,255,255,0.05); border-radius:6px; font-size:12px;">
+                        <div style="margin-bottom:6px;">
+                            <strong style="color:#4fc3f7;">▶ 播放头（蓝色）</strong>
+                            — 视频当前播放位置，按空格播放/暂停时移动的指针。
+                        </div>
+                        <div>
+                            <strong style="color:#ff9800;">▼ 锚点（橙色）</strong>
+                            — 固定的时间标记，<strong>不会</strong>随播放移动。用于精确定位切片位置。点击时间轴或使用方向键可放置/移动锚点。
+                        </div>
+                    </div>
+                    <div style="margin:4px 0 14px 10px; font-size:12px; opacity:0.85;">
+                        <strong>工作流</strong>：播放发现感兴趣的内容 → 按 <code>J</code> 将锚点放到播放头位置 → 用 <code>←</code> <code>→</code> 微调锚点 → <code>Q</code> 设起点 → 继续调整 → <code>W</code> 设终点并自动添加片段。
+                    </div>
+
+                    <!-- 4. 完整快捷键 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⌨️ 快捷键一览</div>
+                    <div style="margin:0 0 4px 10px; font-size:11px; opacity:0.7;">
+                        提示：快捷键仅在视频加载后生效，且焦点不在输入框时有效
                     </div>
                     <div style="margin:0 0 14px 10px;">
-                        <div style="display:grid; grid-template-columns: auto 1fr; gap:4px 12px; font-size:12px;">
-                            <strong>空格</strong><span>播放 / 暂停</span>
-                            <strong>← / →</strong><span>后退 / 前进 1 秒</span>
-                            <strong>Q</strong><span>设定片段起点</span>
-                            <strong>W</strong><span>设定片段终点</span>
-                            <strong>C</strong><span>确认添加当前片段</span>
-                            <strong>P</strong><span>预览当前选中的片段</span>
-                            <strong>[</strong><span>跳转到片段起点（方便微调）</span>
+                        <!-- 播放控制 -->
+                        <div style="font-weight:700; font-size:12px; margin:6px 0 4px; color:var(--accent-color); opacity:0.8;">播放控制</div>
+                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
+                            <code>空格</code><span>播放 / 暂停</span>
+                        </div>
+                        <!-- 锚点操作 -->
+                        <div style="font-weight:700; font-size:12px; margin:8px 0 4px; color:var(--accent-color); opacity:0.8;">锚点操作</div>
+                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
+                            <code>← / →</code><span>锚点后退 / 前进 1 秒</span>
+                            <code>J</code><span>将锚点放置到当前播放头位置</span>
+                            <code>D</code><span>将播放头跳转到锚点位置</span>
+                        </div>
+                        <!-- 片段操作 -->
+                        <div style="font-weight:700; font-size:12px; margin:8px 0 4px; color:var(--accent-color); opacity:0.8;">片段标记</div>
+                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
+                            <code>Q</code><span>从锚点位置设定片段起点</span>
+                            <code>W</code><span>从锚点位置设定片段终点（起点已设则自动添加）</span>
+                            <code>C / Enter</code><span>手动确认添加片段</span>
+                        </div>
+                        <!-- 辅助快捷键 -->
+                        <div style="font-weight:700; font-size:12px; margin:8px 0 4px; color:var(--accent-color); opacity:0.8;">辅助操作</div>
+                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
+                            <code>P</code><span>预览时间轴上选中的片段</span>
+                            <code>[</code><span>跳转到当前片段起点（方便微调）</span>
                         </div>
                     </div>
 
-                    <!-- 4. 高级功能 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">✨ 高级功能
-                    </div>
+                    <!-- 5. 时间轴交互 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📐 时间轴操作</div>
                     <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>预览合并</strong>：在提交前预览所有片段的合并效果并调整顺序</li>
-                        <li><strong>历史输出</strong>：查看和管理之前生成的合并文件</li>
-                        <li><strong>B站投稿</strong>：直接将合并后的视频投稿到哔哩哔哩</li>
-                        <li><strong>多视频合并</strong>：可从不同视频中提取片段并合并为一个文件</li>
-                        <li><strong>进度实时显示</strong>：合并时显示实时进度和预计剩余时间</li>
+                        <li><strong>点击时间轴空白处</strong> — 放置锚点到该位置</li>
+                        <li><strong>拖拽锚点</strong> — 按住锚点箭头可自由拖动定位</li>
+                        <li><strong>拖拽 Q / W 手柄</strong> — 直接拖拽起点/终点手柄调整已设定的位置</li>
+                        <li><strong>点击片段色块</strong> — 选中/取消选中片段（可多选）</li>
+                        <li><strong>框选</strong> — 在时间轴空白处拖拽可框选多个片段</li>
+                        <li><strong>缩放挡位</strong> — 使用工具栏按钮切换 1×~64× 缩放级别</li>
+                        <li><strong>跟随播放头</strong> — 点击"📍"按钮切换是否自动跟随播放位置</li>
+                        <li><strong>鼠标悬停</strong> — 显示时间游标和精确时间提示</li>
                     </ul>
 
-                    <!-- 5. 注意事项 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⚠️ 注意事项
-                    </div>
+                    <!-- 6. 视频播放器 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🎬 播放器功能</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>进度条</strong> — 点击/拖拽可跳转到任意位置，已添加的片段会以彩色色块标注</li>
+                        <li><strong>倍速播放</strong> — 点击速度按钮（如 1.0× ▾）切换 0.5× / 1.0× / 1.25× / 1.5× 倍速</li>
+                        <li><strong>全屏播放</strong> — 点击全屏按钮或双击视频画面进入全屏</li>
+                        <li><strong>缓冲指示</strong> — 网络不稳时会自动显示"缓冲中…"提示</li>
+                        <li><strong>进度记忆</strong> — 再次打开同一视频时，会询问是否从上次位置继续</li>
+                    </ul>
+
+                    <!-- 7. 时间轴辅助工具 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🔧 时间轴辅助工具</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>缩略图条</strong> — 点击工具栏"🖼"按钮开启，每 30 秒显示一帧缩略图，方便快速定位</li>
+                        <li><strong>波形图</strong> — 点击工具栏"~~"按钮开启，显示音频波形，帮助识别有声/静音段落</li>
+                        <li><strong>删除选中</strong> — 在时间轴上选中片段后，点击"🗑"按钮可批量删除</li>
+                    </ul>
+
+                    <!-- 8. 片段管理 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📋 片段列表管理</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>拖拽排序</strong> — 在片段列表中长按拖拽可调整片段合并顺序</li>
+                        <li><strong>删除单个</strong> — 点击片段右侧的 × 按钮删除（需确认）</li>
+                        <li><strong>清空全部</strong> — 点击"清空"按钮清除所有片段（需确认）</li>
+                        <li><strong>跨视频合并</strong> — 片段可来自不同视频，列表中以不同颜色区分</li>
+                        <li><strong>自动保存</strong> — 片段列表、用户名自动保存在浏览器中，刷新页面后可恢复</li>
+                    </ul>
+
+                    <!-- 9. 合并与导出 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🔨 合并与导出</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>切割模式</strong>：
+                            <ul style="margin:4px 0 4px 14px; padding:0;">
+                                <li><strong>快速切割</strong> — 速度快，可能有 ±几秒误差，最长 120 分钟</li>
+                                <li><strong>精准切割</strong> — 逐帧重编码，精确到帧，速度较慢，最长 30 分钟</li>
+                            </ul>
+                        </li>
+                        <li><strong>视频源</strong>：可选"压制版"（含弹幕字幕）或"原版"（无弹幕）</li>
+                        <li><strong>文件名自定义</strong> — 可设置输出文件名，实时预览最终文件名</li>
+                        <li><strong>预览合并</strong> — 合并前可预览所有片段的连续播放效果，并拖拽调整顺序</li>
+                        <li><strong>实时进度</strong> — 合并时显示百分比进度、当前处理片段和预计剩余时间</li>
+                        <li><strong>取消任务</strong> — 合并过程中可随时取消</li>
+                    </ul>
+
+                    <!-- 10. B站投稿 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📺 B站投稿</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li>合并完成后可直接投稿到哔哩哔哩</li>
+                        <li>支持设置标题、简介、封面图片和标签（最多 10 个）</li>
+                        <li>显示实时上传进度（速度、百分比、预计时间）</li>
+                        <li>上传过程中可随时停止</li>
+                    </ul>
+
+                    <!-- 11. 注意事项 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⚠️ 注意事项</div>
                     <ul style="margin:0 0 8px 18px; padding:0; font-size:12px;">
-                        <li>同一时间只能运行一个合并任务</li>
-                        <li>片段列表和用户名会自动保存在浏览器中</li>
-                        <li>合并成功后当前片段列表会自动清空</li>
+                        <li>同一时间只能运行一个合并任务，请等待完成或取消后再提交新任务</li>
+                        <li>片段列表和用户名会自动保存在浏览器中，刷新或关闭页面后再次访问可恢复</li>
+                        <li>合并成功后可在结果对话框中选择是否清空当前片段列表</li>
+                        <li>同一视频内的片段不能有时间重叠</li>
+                        <li>预览视频会消耗流量，请注意网络环境</li>
+                        <li>"历史输出"中可查看、下载或删除之前合并的文件</li>
                     </ul>
                 </div>
 
@@ -424,14 +518,14 @@
                         <div style="display:block; margin-bottom:6px; font-weight:700;">源版本</div>
                         <div class="source-selection-group">
                             <label class="source-option">
-                                <input type="radio" name="sourceMode" value="encode" checked>
+                                <input type="radio" name="sourceMode" value="encode">
                                 <div class="source-content">
                                     <span class="source-title">压制版</span>
                                     <span class="source-desc">压制弹幕</span>
                                 </div>
                             </label>
                             <label class="source-option">
-                                <input type="radio" name="sourceMode" value="original">
+                                <input type="radio" name="sourceMode" value="original" checked>
                                 <div class="source-content">
                                     <span class="source-title">原版</span>
                                     <span class="source-desc">没有进行压制</span>
@@ -444,14 +538,14 @@
                         <div style="display:block; margin-bottom:6px; font-weight:700;">切割模式</div>
                         <div class="source-selection-group">
                             <label class="source-option">
-                                <input type="radio" name="cutMode" value="fast" checked>
+                                <input type="radio" name="cutMode" value="fast">
                                 <div class="source-content">
                                     <span class="source-title">快速切割</span>
                                     <span class="source-desc">速度快，切点可能不精准（±几秒）。最大 <strong>120 分钟</strong></span>
                                 </div>
                             </label>
                             <label class="source-option">
-                                <input type="radio" name="cutMode" value="precise">
+                                <input type="radio" name="cutMode" value="precise" checked>
                                 <div class="source-content">
                                     <span class="source-title">精准切割</span>
                                     <span class="source-desc">精确到帧，但需要重新编码，速度较慢。最大 <strong>30 分钟</strong></span>

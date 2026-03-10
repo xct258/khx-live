@@ -363,6 +363,25 @@ if (cancelMergeBtnModalFixed) {
 
         // ---- 确认模式 ----
         if (mode === 'ack') {
+            // apply clear/keep decision from radio
+            try {
+                const sel = document.querySelector('input[name="clearChoice"]:checked');
+                const val = sel ? sel.value : 'keep';
+                if (val === 'clear') {
+                    videoTasks = [];
+                    __invalidateMergeOrderOverride();
+                    tempStart = null;
+                    tempEnd = null;
+                    updateClipInputs();
+                    renderNewClipList();
+                    __saveClipToolState();
+                    showToast('已清空当前片段列表');
+                } else {
+                    showToast('已保留片段列表');
+                }
+            } catch (e) {
+                // ignore if radio not present
+            }
             const jobId = cancelMergeBtnModalFixed.dataset.jobId || '';
             __ackCurrentMergeResult(jobId);
             return;
@@ -833,12 +852,29 @@ function __renderMergeTerminalFromMergeStatus(state) {
                     `}
 
                     <div class="merge-result-actions">
-                        <button id="downloadClipBtn" type="button">
-                            下载视频
-                        </button>
-                        <button id="copyClipLinkBtn" type="button">
-                            复制链接
-                        </button>
+                            <button id="downloadClipBtn" type="button">
+                                下载视频
+                            </button>
+                            <button id="copyClipLinkBtn" type="button">
+                                复制链接
+                            </button>
+                    </div>
+                    <div class="clear-choice-group" style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:6px;">
+                            <label class="source-option">
+                                <input type="radio" name="clearChoice" value="clear" checked>
+                                <div class="source-content">
+                                    <span class="source-title">清空片段列表</span>
+                                    <span class="source-desc">提交后自动清空</span>
+                                </div>
+                            </label>
+                            <label class="source-option">
+                                <input type="radio" name="clearChoice" value="keep">
+                                <div class="source-content">
+                                    <span class="source-title">保留片段列表</span>
+                                    <span class="source-desc">保持列表不变</span>
+                                </div>
+                            </label>
+                        </div>
                     </div>
                 </div>
             `;
@@ -900,7 +936,7 @@ function __renderMergeTerminalFromMergeStatus(state) {
                     }
                     const link = document.createElement('a');
                     link.href = downloadHref;
-                    link.download = outPath;
+                    link.download = String(outPath).split(/[/\\]/).pop();
                     link.click();
                 });
             }
@@ -2052,12 +2088,13 @@ function __renderOutputHistory() {
     const itemsHtml = list.map((it) => {
         const file = it.file;
         const safeFile = String(file).replace(/"/g, '&quot;');
+        const safeFileName = String(file).split(/[/\\]/).pop().replace(/"/g, '&quot;');
         return `
             <div class="glass" style="padding:10px; margin-top:10px;" data-output-item="${safeFile}">
                 <div style="font-weight:bold; white-space:normal; overflow-wrap:anywhere; word-break:break-word; margin-bottom:8px;">${safeFile}</div>
                 <div class="output-status" style="display:none; font-size:12px; color:#ff9999; margin-bottom:6px;">⚠ 文件不存在</div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-                    <a href="/clips/${encodeURIComponent(file)}" download="${safeFile}" class="download-link">
+                    <a href="/clips/${encodeURIComponent(file)}" download="${safeFileName}" class="download-link">
                         <button type="button" class="download-btn">下载</button>
                     </a>
                     <button type="button" class="openUploadBtn" data-file="${safeFile}">投稿</button>
@@ -2216,27 +2253,12 @@ async function __loadClipToolState() {
                     try { showToast('检测到正在运行的切片任务，已自动恢复片段', 'info', 3000); } catch (e) { }
 
                 } else if (status === 'done') {
-                    // 自动清空本地保存的片段（保留 username），避免在合并完成后误提示恢复
+                    // 已完成状态也恢复片段而不自动删除，让用户在结果卡片中选择是否清空
                     try {
-                        // 保留 username 与其它字段，但清空 videoTasks
-                        const raw = localStorage.getItem(CLIP_TOOL_STATE_KEY);
-                        if (raw) {
-                            try {
-                                const st = JSON.parse(raw);
-                                if (st && typeof st === 'object') {
-                                    st.videoTasks = [];
-                                    localStorage.setItem(CLIP_TOOL_STATE_KEY, JSON.stringify(st));
-                                }
-                            } catch (e) { /* ignore parsing errors */ }
-                        }
-
-                        // 内存与 UI 同步清空
-                        videoTasks = [];
-                        tempStart = null; tempEnd = null;
-                        updateClipInputs();
+                        videoTasks = Array.isArray(savedTasks) ? JSON.parse(JSON.stringify(savedTasks)) : [];
                         renderNewClipList();
                         try { __saveClipToolState(); } catch (e) { }
-                        try { showToast('检测到已完成的合并任务，已自动清空本地片段列表', 'info', 4000); } catch (e) { }
+                        try { showToast('检测到上次合并任务已完成，片段已恢复，可在结果框中选择是否清空', 'info', 4000); } catch (e) { }
                     } catch (e) {
                         // ignore
                     }
@@ -4090,7 +4112,8 @@ if (quickSetStartBtn) {
     quickSetStartBtn.addEventListener('click', () => {
         if (!currentVideoName) { showAlertModal('请先选择视频'); return; }
         if (!__isVideoReady()) { showToast('请先点击预览以加载视频，再设定起点'); return; }
-        tempStart = roundToMs(player.currentTime);
+        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
+        tempStart = roundToMs(anchorT !== null ? anchorT : player.currentTime);
         updateClipInputs();
         showToast(`起点已设定: ${formatTime(tempStart)}`);
     });
@@ -4099,7 +4122,8 @@ if (quickSetEndBtn) {
     quickSetEndBtn.addEventListener('click', () => {
         if (!currentVideoName) { showAlertModal('请先选择视频'); return; }
         if (!__isVideoReady()) { showToast('请先点击预览以加载视频，再设定终点'); return; }
-        tempEnd = roundToMs(player.currentTime);
+        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
+        tempEnd = roundToMs(anchorT !== null ? anchorT : player.currentTime);
         updateClipInputs();
         // 若起点已设定 → 自动提交片段（方案A）
         if (tempStart !== null) {
@@ -4386,15 +4410,34 @@ async function pollJob(jobId) {
                     ${!fileExists && outPath ? '<div id="fileNotExistWarning" style="color:#ff8080; font-size:12px; background:rgba(255,0,0,0.1); padding:8px; border-radius:6px; width:100%;">⚠ 文件不存在或已被删除</div>' : '<div id="fileNotExistWarning" style="display:none; color:#ff8080; font-size:12px; background:rgba(255,0,0,0.1); padding:8px; border-radius:6px; width:100%;">⚠ 文件不存在或已被删除</div>'}
 
                     <div class="merge-result-actions">
-                        <button id="downloadClipBtn" type="button" ${!fileExists ? 'disabled' : ''}>
-                            下载视频${!fileExists ? ' (失效)' : ''}
-                        </button>
-                        <button id="copyClipLinkBtn" type="button" ${!fileExists ? 'disabled' : ''}>
-                            复制链接${!fileExists ? ' (失效)' : ''}
-                        </button>
+                            <button id="downloadClipBtn" type="button" ${!fileExists ? 'disabled' : ''}>
+                                下载视频${!fileExists ? ' (失效)' : ''}
+                            </button>
+                            <button id="copyClipLinkBtn" type="button" ${!fileExists ? 'disabled' : ''}>
+                                复制链接${!fileExists ? ' (失效)' : ''}
+                            </button>
+                    </div>
+                    <div class="clear-choice-group" style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:6px;">
+                            <label class="source-option">
+                                <input type="radio" name="clearChoice" value="clear" checked>
+                                <div class="source-content">
+                                    <span class="source-title">清空片段列表</span>
+                                    <span class="source-desc">提交后自动清空</span>
+                                </div>
+                            </label>
+                            <label class="source-option">
+                                <input type="radio" name="clearChoice" value="keep">
+                                <div class="source-content">
+                                    <span class="source-title">保留片段列表</span>
+                                    <span class="source-desc">保持列表不变</span>
+                                </div>
+                            </label>
+                        </div>
                     </div>
                 </div>
             `;
+
+            // no inline confirm button needed; action handled by fixed button listener
         }
 
         // 终态：按钮切换为确认模式
@@ -4403,16 +4446,9 @@ async function pollJob(jobId) {
         __addOutputToHistory(job.out_path);
         __renderOutputHistory();
 
-        // 合并成功：自动清空当前片段列表（避免重复提交同一批片段）
+        // (旧逻辑已搬移到卡片内按钮事件)
         try {
-            videoTasks = [];
-            __invalidateMergeOrderOverride();
-            tempStart = null;
-            tempEnd = null;
-            updateClipInputs();
-            renderNewClipList();
-            __saveClipToolState();
-            showToast('合并完成：已自动清空当前片段列表');
+            // no-op placeholder to maintain structure
         } catch (e) {
             // ignore
         }
@@ -4462,7 +4498,7 @@ async function pollJob(jobId) {
                 // 触发下载
                 const link = document.createElement('a');
                 link.href = downloadHref;
-                link.download = outPath;
+                link.download = String(outPath).split(/[/\\]/).pop();
                 link.click();
             });
         }
@@ -5449,16 +5485,18 @@ document.addEventListener('keydown', (e) => {
 
     const key = e.key.toLowerCase();
 
-    // [Q] 设定起点
+    // [Q] 设定起点（从锚点位置读取，无锚点则从播放头）
     if (key === 'q') {
-        tempStart = roundToMs(player.currentTime);
+        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
+        tempStart = roundToMs(anchorT !== null ? anchorT : player.currentTime);
         updateClipInputs();
         showToast(`起点已设定: ${formatTime(tempStart)}`);
         if (quickSetStartBtn) triggerBtnFeedback(quickSetStartBtn);
     }
-    // [W] 设定终点，若起点已设定则自动添加片段（方案A）
+    // [W] 设定终点（从锚点位置读取），若起点已设定则自动添加片段
     else if (key === 'w') {
-        tempEnd = roundToMs(player.currentTime);
+        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
+        tempEnd = roundToMs(anchorT !== null ? anchorT : player.currentTime);
         updateClipInputs();
         if (quickSetEndBtn) triggerBtnFeedback(quickSetEndBtn);
         if (tempStart !== null) {
@@ -5503,15 +5541,25 @@ document.addEventListener('keydown', (e) => {
             // ignore
         }
     }
-    // [ArrowLeft] 后退1秒
+    // [D] 跳转播放头到锚点
+    else if (key === 'd') {
+        e.preventDefault();
+        if (typeof window.__tlJumpToAnchor === 'function') window.__tlJumpToAnchor();
+    }
+    // [J] 锚点定位到当前播放头
+    else if (key === 'j') {
+        e.preventDefault();
+        if (typeof window.__tlPlaceAnchorAtPlayhead === 'function') window.__tlPlaceAnchorAtPlayhead();
+    }
+    // [ArrowLeft] 锚点后退1秒
     else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        __seekBack1();
+        if (typeof window.__tlMoveAnchor === 'function') window.__tlMoveAnchor(-1);
     }
-    // [ArrowRight] 前进1秒
+    // [ArrowRight] 锚点前进1秒
     else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        __seekForward1();
+        if (typeof window.__tlMoveAnchor === 'function') window.__tlMoveAnchor(1);
     }
     // [Space] 播放/暂停
     else if (key === ' ') {
@@ -5556,7 +5604,7 @@ document.addEventListener('keydown', (e) => {
     let __tlBoxStartX = 0;
     let __tlBoxStartY = 0;
     let __tlSuppressWrapClick = false;
-    const TL_ZOOM_LEVELS = [1, 2, 4, 8, 16, 32, 64];
+    const TL_ZOOM_LEVELS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
     const TL_CLIP_COLOR_RGBS = [
         '79,158,255',
         '100,220,120',
@@ -5572,6 +5620,21 @@ document.addEventListener('keydown', (e) => {
     let __tlSbHintAt = 0;
     let __tlToolbarResizeObserver = null;
     let __tlCompactLayoutRaf = 0;
+
+    // ---- 波形可视化状态 ----
+    let __tlWaveformEnabled = true;
+    let __tlWaveformCanvas = null;
+    let __tlWaveformData = null;    // {peaks:[], duration, samples}
+    let __tlWaveformAbortController = null;
+    const __tlWaveformCache = new Map();
+    const __tlWaveformJobs = new Map();
+    let __tlWaveformRenderToken = 0;
+
+    // ---- 播放头拖拽状态 ----
+    let __tlPlayheadDragging = false;
+
+    // ---- 锚点标记状态（固定指针，不随播放移动）----
+    let __tlAnchorTime = null;   // 锚点所在时间（秒），null=未放置
 
     function _tlMaybeShowFollowSbHint() {
         if (!__tlFollowPlayhead) return;
@@ -5832,15 +5895,102 @@ document.addEventListener('keydown', (e) => {
         _tlRenderThumbStrip(__tlThumbLastStrip, __tlThumbLastDur, __tlThumbLastData, __tlThumbStepSec);
     }
 
+    // ---- 波形可视化 ----
+    function _tlWaveformKey() {
+        const dur = _tlDur();
+        if (!currentVideoName || !dur) return '';
+        return `${currentVideoName}__${Math.round(dur)}`;
+    }
+
+    function _tlAbortWaveformLoading() {
+        if (__tlWaveformAbortController) {
+            try { __tlWaveformAbortController.abort(); } catch (e) { }
+            __tlWaveformAbortController = null;
+        }
+    }
+
+    async function _tlFetchWaveform(signal) {
+        const dur = _tlDur();
+        if (!dur || !currentVideoName || !__isVideoReady()) return null;
+        const key = _tlWaveformKey();
+        if (!key) return null;
+        if (__tlWaveformCache.has(key)) return __tlWaveformCache.get(key);
+        if (__tlWaveformJobs.has(key)) return __tlWaveformJobs.get(key);
+
+        const samples = Math.max(200, Math.min(2000, Math.round(dur / 0.5)));
+        const params = new URLSearchParams({ name: currentVideoName, samples: String(samples) });
+        const job = (async () => {
+            try {
+                const res = await fetch(`/api/waveform?${params.toString()}`, { signal });
+                if (!res.ok) return null;
+                const data = await res.json();
+                if (data && Array.isArray(data.peaks) && data.peaks.length > 0) {
+                    __tlWaveformCache.set(key, data);
+                    return data;
+                }
+                return null;
+            } catch (e) {
+                return null;
+            } finally {
+                __tlWaveformJobs.delete(key);
+            }
+        })();
+        __tlWaveformJobs.set(key, job);
+        return job;
+    }
+
+    function _tlRenderWaveformCanvas(canvas, peaks) {
+        if (!canvas || !peaks || peaks.length === 0) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, w, h);
+
+        const barCount = peaks.length;
+        const barWidth = w / barCount;
+        const midY = h / 2;
+
+        // gradient from accent color
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, 'rgba(79, 158, 255, 0.85)');
+        grad.addColorStop(0.5, 'rgba(79, 158, 255, 0.55)');
+        grad.addColorStop(1, 'rgba(79, 158, 255, 0.85)');
+        ctx.fillStyle = grad;
+
+        for (let i = 0; i < barCount; i++) {
+            const amp = Math.max(0, Math.min(1, peaks[i] || 0));
+            const barH = Math.max(1, amp * midY * 0.92);
+            const x = i * barWidth;
+            ctx.fillRect(x, midY - barH, Math.max(0.8, barWidth - 0.3), barH * 2);
+        }
+    }
+
+    function _tlRerenderWaveformByZoom() {
+        if (!__tlWaveformEnabled) return;
+        if (!__tlWaveformCanvas || !__tlWaveformCanvas.isConnected) return;
+        if (!__tlWaveformData || !Array.isArray(__tlWaveformData.peaks)) return;
+        _tlRenderWaveformCanvas(__tlWaveformCanvas, __tlWaveformData.peaks);
+    }
+
     function _tlAutoZoomByDuration(durationSec) {
         const d = Number(durationSec) || 0;
-        if (d <= 15 * 60) return 1;
-        if (d <= 30 * 60) return 2;
-        if (d <= 60 * 60) return 4;
-        if (d <= 120 * 60) return 8;
-        if (d <= 240 * 60) return 16;
-        if (d <= 360 * 60) return 32;
-        return 64;
+        // auto-zoom ramp is deliberately shifted upwards so that
+        // even relatively short durations use a larger scale by
+        // default.  we also support the new high zoom levels.
+        if (d <= 15 * 60) return 2;
+        if (d <= 30 * 60) return 4;
+        if (d <= 60 * 60) return 8;
+        if (d <= 120 * 60) return 16;
+        if (d <= 240 * 60) return 32;
+        if (d <= 360 * 60) return 64;
+        if (d <= 720 * 60) return 128;
+        return 256;
     }
 
     function _tlTooltipEl() {
@@ -6135,6 +6285,8 @@ document.addEventListener('keydown', (e) => {
         _tlUpdateSelection();
         _tlUpdatePlayhead();
         _tlRerenderThumbStripByZoom();
+        _tlRerenderWaveformByZoom();
+        _tlUpdateAnchor();
         _tlSbUpdate();
     }
 
@@ -6210,6 +6362,12 @@ document.addEventListener('keydown', (e) => {
         thumbBtn.textContent = '缩略图';
         thumbBtn.title = '显示/隐藏时间轴缩略图';
         thumbBtn.disabled = !canTimelineInteract;
+        const waveformBtn = document.createElement('button');
+        waveformBtn.className = 'tl-zoom-btn tl-waveform-btn' + (__tlWaveformEnabled ? ' active' : '');
+        waveformBtn.type = 'button';
+        waveformBtn.textContent = '波形';
+        waveformBtn.title = '显示/隐藏音频波形';
+        waveformBtn.disabled = !canTimelineInteract;
 
         const compactActionsGroup = document.createElement('span');
         compactActionsGroup.className = 'tl-zoom-group tl-zoom-collapsed tl-compact-actions';
@@ -6231,22 +6389,30 @@ document.addEventListener('keydown', (e) => {
         compactThumbItem.type = 'button';
         compactThumbItem.textContent = '缩略图';
         compactThumbItem.disabled = !canTimelineInteract;
+        const compactWaveformItem = document.createElement('button');
+        compactWaveformItem.className = 'tl-zoom-menu-item';
+        compactWaveformItem.type = 'button';
+        compactWaveformItem.textContent = '波形';
+        compactWaveformItem.disabled = !canTimelineInteract;
         compactActionsMenu.appendChild(compactFollowItem);
         compactActionsMenu.appendChild(compactThumbItem);
+        compactActionsMenu.appendChild(compactWaveformItem);
         compactActionsGroup.appendChild(compactActionsToggle);
         compactActionsGroup.appendChild(compactActionsMenu);
 
-        function _syncFollowThumbActionState() {
+        function _syncFollowThumbWaveformState() {
             followBtn.classList.toggle('active', __tlFollowPlayhead);
             thumbBtn.classList.toggle('active', __tlThumbEnabled);
+            waveformBtn.classList.toggle('active', __tlWaveformEnabled);
             compactFollowItem.classList.toggle('active', __tlFollowPlayhead);
             compactThumbItem.classList.toggle('active', __tlThumbEnabled);
+            compactWaveformItem.classList.toggle('active', __tlWaveformEnabled);
         }
 
         function _toggleFollowPlayhead() {
             if (!canTimelineInteract) return;
             __tlFollowPlayhead = !__tlFollowPlayhead;
-            _syncFollowThumbActionState();
+            _syncFollowThumbWaveformState();
             if (__tlFollowPlayhead) _tlFollowScroll(player.currentTime || 0);
         }
 
@@ -6263,12 +6429,21 @@ document.addEventListener('keydown', (e) => {
         });
 
         let _toggleThumb = null;
+        let _toggleWaveform = null;
         thumbBtn.addEventListener('click', () => {
             if (_toggleThumb) _toggleThumb();
         });
         compactThumbItem.addEventListener('click', (e) => {
             e.stopPropagation();
             if (_toggleThumb) _toggleThumb();
+            compactActionsGroup.classList.remove('open');
+        });
+        waveformBtn.addEventListener('click', () => {
+            if (_toggleWaveform) _toggleWaveform();
+        });
+        compactWaveformItem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (_toggleWaveform) _toggleWaveform();
             compactActionsGroup.classList.remove('open');
         });
 
@@ -6313,6 +6488,7 @@ document.addEventListener('keydown', (e) => {
         centerGroup.appendChild(zoomGroup);
         centerGroup.appendChild(followBtn);
         centerGroup.appendChild(thumbBtn);
+        centerGroup.appendChild(waveformBtn);
         centerGroup.appendChild(compactActionsGroup);
         centerGroup.appendChild(delSelectedBtn);
 
@@ -6420,11 +6596,29 @@ document.addEventListener('keydown', (e) => {
         __tlThumbLastData = [];
         track.appendChild(thumbsStrip);
         _tlRenderThumbStrip(thumbsStrip, dur, [], __tlThumbStepSec);
+
+        // ---- 波形 canvas ----
+        const waveformCanvas = document.createElement('canvas');
+        waveformCanvas.className = 'timeline-waveform';
+        waveformCanvas.style.display = __tlWaveformEnabled ? '' : 'none';
+        __tlWaveformCanvas = waveformCanvas;
+        track.appendChild(waveformCanvas);
+        track.classList.toggle('has-waveform', !!__tlWaveformEnabled);
+
         _toggleThumb = () => {
             if (!canTimelineInteract) return;
             __tlThumbEnabled = !__tlThumbEnabled;
+            // 互斥：开启缩略图时关闭波形
+            if (__tlThumbEnabled && __tlWaveformEnabled) {
+                __tlWaveformEnabled = false;
+                waveformCanvas.style.display = 'none';
+                track.classList.remove('has-waveform');
+                _tlAbortWaveformLoading();
+                __tlWaveformRenderToken += 1;
+                __tlWaveformData = null;
+            }
             try { track.classList.toggle('has-thumbs', !!__tlThumbEnabled); } catch (e) { }
-            _syncFollowThumbActionState();
+            _syncFollowThumbWaveformState();
             // when enabling, hide existing empty hint; re-show when disabling if needed
             const hintEl = document.getElementById('tlEmptyHint');
             if (hintEl) {
@@ -6456,7 +6650,60 @@ document.addEventListener('keydown', (e) => {
                 _tlRenderThumbStrip(thumbsStrip, dur, thumbs, __tlThumbStepSec);
             }).catch(() => { });
         };
-        _syncFollowThumbActionState();
+        _syncFollowThumbWaveformState();
+
+        // ---- 波形开关 ----
+        _toggleWaveform = () => {
+            if (!canTimelineInteract) return;
+            __tlWaveformEnabled = !__tlWaveformEnabled;
+            // 互斥：开启波形时关闭缩略图
+            if (__tlWaveformEnabled && __tlThumbEnabled) {
+                __tlThumbEnabled = false;
+                track.classList.remove('has-thumbs');
+                _tlAbortThumbLoading();
+                __tlThumbRenderToken += 1;
+                __tlThumbLastData = [];
+                _tlRenderThumbStrip(thumbsStrip, dur, [], __tlThumbStepSec);
+                const hintEl = document.getElementById('tlEmptyHint');
+                if (hintEl) hintEl.style.display = '';
+            }
+            waveformCanvas.style.display = __tlWaveformEnabled ? '' : 'none';
+            track.classList.toggle('has-waveform', !!__tlWaveformEnabled);
+            _syncFollowThumbWaveformState();
+            if (!__tlWaveformEnabled) {
+                _tlAbortWaveformLoading();
+                __tlWaveformRenderToken += 1;
+                __tlWaveformData = null;
+                return;
+            }
+            if (!(currentVideoName && dur > 0 && __isVideoReady())) return;
+            const myToken = ++__tlWaveformRenderToken;
+            __tlWaveformAbortController = new AbortController();
+            _tlFetchWaveform(__tlWaveformAbortController.signal).then(data => {
+                if (myToken !== __tlWaveformRenderToken) return;
+                if (!waveformCanvas.isConnected) return;
+                if (!__tlWaveformEnabled) return;
+                if (data && Array.isArray(data.peaks)) {
+                    __tlWaveformData = data;
+                    _tlRenderWaveformCanvas(waveformCanvas, data.peaks);
+                }
+            }).catch(() => { });
+        };
+
+        // 如果波形已启用，自动加载
+        if (__tlWaveformEnabled && currentVideoName && dur > 0 && __isVideoReady()) {
+            const myToken = ++__tlWaveformRenderToken;
+            __tlWaveformAbortController = new AbortController();
+            _tlFetchWaveform(__tlWaveformAbortController.signal).then(data => {
+                if (myToken !== __tlWaveformRenderToken) return;
+                if (!waveformCanvas.isConnected) return;
+                if (!__tlWaveformEnabled) return;
+                if (data && Array.isArray(data.peaks)) {
+                    __tlWaveformData = data;
+                    _tlRenderWaveformCanvas(waveformCanvas, data.peaks);
+                }
+            }).catch(() => { });
+        }
 
         __tlRenderedClips = [];
 
@@ -6578,6 +6825,53 @@ document.addEventListener('keydown', (e) => {
         cur.style.display = 'none';
         track.appendChild(cur);
 
+        // 播放头顶部箭头支持拖拽定位（剪映风格）
+        arrowTop.style.pointerEvents = 'all';
+        arrowTop.style.cursor = 'ew-resize';
+        arrowTop.addEventListener('mousedown', e => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!canTimelineInteract) return;
+            __tlPlayheadDragging = true;
+            ph.classList.add('dragging');
+            document.body.style.userSelect = 'none';
+            // 拖拽时暂停播放
+            try { if (!player.paused) player.pause(); } catch (err) { }
+        });
+
+        // 锚点标记（固定指针，不随播放移动）
+        const anchor = document.createElement('div');
+        anchor.className = 'timeline-anchor';
+        anchor.id = 'tlAnchor';
+        const anchorLine = document.createElement('div');
+        anchorLine.className = 'timeline-anchor-line';
+        const anchorArrow = document.createElement('div');
+        anchorArrow.className = 'timeline-anchor-arrow';
+        const anchorLabel = document.createElement('div');
+        anchorLabel.className = 'timeline-anchor-label';
+        anchorLabel.id = 'tlAnchorLabel';
+        anchor.appendChild(anchorLine);
+        anchor.appendChild(anchorArrow);
+        anchor.appendChild(anchorLabel);
+        track.appendChild(anchor);
+
+        // 锚点箭头可拖拽移动
+        anchorArrow.addEventListener('mousedown', e => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!canTimelineInteract) return;
+            anchor.dataset.dragging = '1';
+            anchor.classList.add('dragging');
+            document.body.style.userSelect = 'none';
+        });
+
+        // 初始化锚点位置
+        if (__tlAnchorTime !== null && dur > 0) {
+            anchor.classList.add('active');
+            anchor.style.left = (__tlAnchorTime / dur * 100) + '%';
+            anchorLabel.textContent = _tlFmtFull(__tlAnchorTime);
+        }
+
         // Q 手柄（起点）
         const hStart = _makeHandle('start', 'Q');
         hStart.id = 'tlHandleStart';
@@ -6655,7 +6949,7 @@ document.addEventListener('keydown', (e) => {
         // ---- 交互：框选片段 ----
         wrap.addEventListener('mousedown', e => {
             if (e.button !== 0) return;
-            if (e.target.closest('.timeline-handle') || e.target.closest('.timeline-clip')) return;
+            if (e.target.closest('.timeline-handle') || e.target.closest('.timeline-clip') || e.target.closest('.timeline-playhead-arrow-top') || e.target.closest('.timeline-anchor-arrow')) return;
             __tlBoxSelecting = true;
             __tlBoxMoved = false;
             __tlBoxStartX = e.clientX;
@@ -6666,18 +6960,15 @@ document.addEventListener('keydown', (e) => {
             e.preventDefault();
         });
 
-        // ---- 交互：点击跳转（非手柄 / 非片段区域）----
+        // ---- 交互：点击定位锚点标记（不影响播放头）----
         wrap.addEventListener('click', e => {
             zoomGroup.classList.remove('open');
             if (__tlSuppressWrapClick) { __tlSuppressWrapClick = false; return; }
-            if (e.target.closest('.timeline-handle') || e.target.closest('.timeline-clip')) return;
-            if (__tlSelectedPlayback) {
-                _tlStopSelectedPlayback();
-                try { player.pause(); } catch (e) { }
-            }
+            if (e.target.closest('.timeline-handle') || e.target.closest('.timeline-clip') || e.target.closest('.timeline-playhead-arrow-top') || e.target.closest('.timeline-anchor-arrow')) return;
+            if (!canTimelineInteract) return;
             const innerX = _tlClientToInnerX(e.clientX);
             const t = _tlXToTime(innerX);
-            try { player.currentTime = t; } catch (e) { }
+            _tlPlaceAnchor(t);
         });
 
         // ---- 交互：hover 时间游标 ----
@@ -6709,6 +7000,59 @@ document.addEventListener('keydown', (e) => {
         if (typeof updateProgress === 'function') updateProgress(player.currentTime, player.duration);
     }
 
+    // ---- 锚点标记：放置 / 更新 / 跳转 ----
+    function _tlPlaceAnchor(t) {
+        const dur = _tlDur();
+        if (!dur || !currentVideoName || !__isVideoReady()) return;
+        __tlAnchorTime = Math.max(0, Math.min(dur, t));
+        _tlUpdateAnchor();
+    }
+
+    function _tlUpdateAnchor() {
+        const el = document.getElementById('tlAnchor');
+        const label = document.getElementById('tlAnchorLabel');
+        if (!el) return;
+        const dur = _tlDur();
+        if (__tlAnchorTime === null || !dur || !currentVideoName || !__isVideoReady()) {
+            el.classList.remove('active');
+            return;
+        }
+        el.classList.add('active');
+        el.style.left = (__tlAnchorTime / dur * 100) + '%';
+        if (label) label.textContent = _tlFmtFull(__tlAnchorTime);
+    }
+
+    function _tlJumpToAnchor() {
+        if (__tlAnchorTime === null) {
+            try { showToast('未设定锚点，请先点击时间轴放置锚点'); } catch (e) { }
+            return;
+        }
+        try { player.currentTime = __tlAnchorTime; } catch (e) { }
+        try { showToast('已跳转到锚点 ' + _tlFmtFull(__tlAnchorTime)); } catch (e) { }
+    }
+
+    function _tlPlaceAnchorAtPlayhead() {
+        if (!currentVideoName || !__isVideoReady()) return;
+        const t = player.currentTime;
+        _tlPlaceAnchor(t);
+        try { showToast('锚点已定位到播放头 ' + _tlFmtFull(t)); } catch (e) { }
+    }
+
+    function _tlMoveAnchor(deltaSec) {
+        if (!currentVideoName || !__isVideoReady()) return;
+        const dur = _tlDur();
+        if (!dur) return;
+        // 若锚点未设定，以当前播放头位置初始化
+        if (__tlAnchorTime === null) __tlAnchorTime = player.currentTime || 0;
+        __tlAnchorTime = Math.max(0, Math.min(dur, __tlAnchorTime + deltaSec));
+        _tlUpdateAnchor();
+        try { showToast((deltaSec > 0 ? '锚点前进' : '锚点后退') + ' ' + Math.abs(deltaSec) + 's → ' + _tlFmtFull(__tlAnchorTime)); } catch (e) { }
+    }
+
+    function _tlGetAnchorTime() {
+        return __tlAnchorTime;
+    }
+
     // ---- 构造手柄 DOM ----
     function _makeHandle(type, key) {
         const h = document.createElement('div');
@@ -6738,11 +7082,40 @@ document.addEventListener('keydown', (e) => {
         return h;
     }
 
-    // ---- 全局 mousemove（手柄拖拽 + 平移结束）----
+    // ---- 全局 mousemove（播放头拖拽 + 锚点拖拽 + 手柄拖拽 + 平移结束）----
     document.addEventListener('mousemove', e => {
         if (__tlBoxSelecting) {
             _tlUpdateBoxSelection(e.clientX, e.clientY);
             return;
+        }
+        // 播放头拖拽（剪映风格 scrub）
+        if (__tlPlayheadDragging) {
+            const inner = _tlInner() || __tlDragTrackEl;
+            if (!inner) return;
+            const rect = inner.getBoundingClientRect();
+            const dur = _tlDur();
+            if (!dur) return;
+            const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            const t = pct * dur;
+            try { player.currentTime = t; } catch (err) { }
+            _showTip(`<div>${_tlFmtFull(t)}</div>`, e.clientX, e.clientY);
+            return;
+        }
+        // 锚点拖拽
+        {
+            const anchorEl = document.getElementById('tlAnchor');
+            if (anchorEl && anchorEl.dataset.dragging === '1') {
+                const inner = _tlInner() || __tlDragTrackEl;
+                if (!inner) return;
+                const rect = inner.getBoundingClientRect();
+                const dur = _tlDur();
+                if (!dur) return;
+                const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                const t = pct * dur;
+                _tlPlaceAnchor(t);
+                _showTip(`<div>锚点: ${_tlFmtFull(t)}</div>`, e.clientX, e.clientY);
+                return;
+            }
         }
         // 手柄拖拽
         if (__tlDragging) {
@@ -6799,6 +7172,22 @@ document.addEventListener('keydown', (e) => {
             __tlDragging = null;
             document.body.style.userSelect = '';
             _hideTip();
+        }
+        if (__tlPlayheadDragging) {
+            __tlPlayheadDragging = false;
+            const ph = document.getElementById('tlPlayhead');
+            if (ph) ph.classList.remove('dragging');
+            document.body.style.userSelect = '';
+            _hideTip();
+        }
+        {
+            const anchorEl = document.getElementById('tlAnchor');
+            if (anchorEl && anchorEl.dataset.dragging === '1') {
+                delete anchorEl.dataset.dragging;
+                anchorEl.classList.remove('dragging');
+                document.body.style.userSelect = '';
+                _hideTip();
+            }
         }
         if (__tlSbDragging) {
             __tlSbDragging = false;
@@ -6930,6 +7319,10 @@ document.addEventListener('keydown', (e) => {
     window.__tlUpdateSelection = _tlUpdateSelection;
     window.__tlUpdatePlayhead = _tlUpdatePlayhead;
     window.__tlTryPlaySelectedClips = _tlTryPlaySelectedClips;
+    window.__tlJumpToAnchor = _tlJumpToAnchor;
+    window.__tlPlaceAnchorAtPlayhead = _tlPlaceAnchorAtPlayhead;
+    window.__tlMoveAnchor = _tlMoveAnchor;
+    window.__tlGetAnchorTime = _tlGetAnchorTime;
     window.__tlSuppressAutoFollow = function (ms) {
         const hold = Math.max(0, Number(ms) || 0);
         __tlSuppressFollowUntil = Date.now() + hold;

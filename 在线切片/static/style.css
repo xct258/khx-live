@@ -979,8 +979,10 @@ button:active {
     flex-direction: column;
     align-items: center;
     text-align: center;
-    gap: 16px;
+    gap: 8px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    max-width: 90%;
+    width: 400px;
 }
 
 .merge-result-title {
@@ -993,6 +995,14 @@ button:active {
 .merge-result-sub {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.6);
+}
+
+.clear-choice-group {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 4px;
 }
 
 
@@ -1029,7 +1039,7 @@ button:active {
     justify-items: center;
     align-items: center;
     width: auto;
-    margin: 12px auto 0;
+    margin: 4px auto 0;
 }
 
 /* 按钮文字居中：水平 + 垂直居中，移动端保持居中并占满宽度 */
@@ -1219,18 +1229,29 @@ pre {
     justify-content: center;
     padding: 18px;
     z-index: 10000;
-    opacity: 0; /* 初始透明，以便动画 */
+    opacity: 0;
+    /* 初始透明，以便动画 */
 }
 
 /* 专门为说明弹窗遮罩层定义的进入/退出动画 */
 @keyframes siteIntroOverlayIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 @keyframes siteIntroOverlayOut {
-    from { opacity: 1; }
-    to   { opacity: 0; }
+    from {
+        opacity: 1;
+    }
+
+    to {
+        opacity: 0;
+    }
 }
 
 .site-intro-overlay.show {
@@ -1257,18 +1278,22 @@ pre {
 }
 
 @keyframes siteIntroModalIn {
+
     /* 先淡入并略微放大，然后快速抖动模拟“弹动”效果 */
     0% {
         opacity: 0;
         transform: scale(0.9);
     }
+
     60% {
         opacity: 1;
         transform: scale(1.02);
     }
+
     80% {
         transform: scale(0.98);
     }
+
     100% {
         opacity: 1;
         transform: scale(1);
@@ -1377,6 +1402,10 @@ pre {
 #videoControlsContainer .timeline-thumbs,
 #videoControlsContainer .timeline-thumb {
     opacity: 1;
+}
+
+#videoControlsContainer .timeline-waveform {
+    opacity: 0.55;
 }
 
 .progress-row {
@@ -2148,7 +2177,8 @@ pre {
 }
 
 #progressModalOverlay.hiding {
-    display: flex; /* keep visible until animation ends */
+    display: flex;
+    /* keep visible until animation ends */
     pointer-events: none;
 }
 
@@ -2165,6 +2195,8 @@ pre {
     flex: 1 1 auto;
     display: flex;
     flex-direction: column;
+    align-items: center;
+    /* center contents horizontally */
     gap: 12px;
 }
 
@@ -3333,12 +3365,13 @@ pre {
 .source-content {
     display: flex;
     flex-direction: column;
-    padding: 12px;
+    padding: 8px 12px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     transition: all 0.2s ease;
-    height: 100%;
+    /* remove full-height so cards size to content instead of stretching */
+    /* height: 100%; */
 }
 
 .source-title {
@@ -3564,11 +3597,19 @@ pre {
 
 /* 结果卡片样式 */
 .merge-result-card {
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 12px;
-    padding: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    /* unified card style for results */
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     text-align: center;
+    gap: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    max-width: 90%;
+    width: 400px;
 }
 
 .merge-result-header {
@@ -3576,16 +3617,15 @@ pre {
 }
 
 .merge-result-title {
-    font-size: 18px;
-    font-weight: bold;
-    color: #4CAF50;
-    /* Green for success */
+    font-size: 20px;
+    font-weight: 800;
+    color: #fff;
     margin-bottom: 4px;
 }
 
 .merge-result-sub {
     font-size: 13px;
-    color: var(--muted-color);
+    color: rgba(255, 255, 255, 0.6);
 }
 
 
@@ -3807,7 +3847,20 @@ pre {
     border-radius: 4px;
     overflow: hidden;
     pointer-events: none;
-    z-index: 0;
+    /* push thumbnails behind all pointers to avoid occlusion */
+    z-index: -1;
+}
+
+/* 波形 canvas */
+.timeline-waveform {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.55;
 }
 
 .timeline-thumb {
@@ -3914,7 +3967,7 @@ pre {
     border-left: 6px solid transparent;
     border-right: 6px solid transparent;
     z-index: 10;
-    filter: drop-shadow(0 0 4px rgba(255,255,255,0.8));
+    filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.8));
 }
 
 .timeline-playhead-arrow-top {
@@ -3960,6 +4013,83 @@ pre {
     background: rgba(255, 255, 255, 0.3);
     pointer-events: none;
     z-index: 7;
+}
+
+/* 播放头拖拽时加粗高亮 */
+.timeline-playhead.dragging {
+    width: 3px;
+    background: rgba(255, 255, 255, 1);
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.9);
+}
+
+/* 锚点标记（固定指针，不随播放移动） */
+.timeline-anchor {
+    position: absolute;
+    top: 0;
+    width: 2px;
+    height: 100%;
+    pointer-events: none;
+    z-index: 9;
+    transform: translateX(-50%);
+    display: none;
+}
+
+.timeline-anchor.active {
+    display: block;
+}
+
+.timeline-anchor-line {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 100%;
+    background: rgba(255, 200, 50, 0.75);
+    box-shadow: 0 0 5px rgba(255, 200, 50, 0.4);
+    pointer-events: none;
+}
+
+.timeline-anchor-arrow {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%) rotate(180deg);
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 8px solid rgba(255, 200, 50, 0.95);
+    filter: drop-shadow(0 0 3px rgba(255, 200, 50, 0.6));
+    pointer-events: all;
+    cursor: ew-resize;
+    z-index: 11;
+}
+
+.timeline-anchor-label {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    font-weight: 700;
+    font-family: monospace;
+    color: rgba(255, 200, 50, 1);
+    white-space: nowrap;
+    pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+    z-index: 11;
+}
+
+.timeline-anchor.dragging .timeline-anchor-line {
+    width: 3px;
+    background: rgba(255, 200, 50, 1);
+    box-shadow: 0 0 10px rgba(255, 200, 50, 0.7);
+}
+
+.timeline-anchor.dragging .timeline-anchor-arrow {
+    border-bottom-color: rgba(255, 200, 50, 1);
+    filter: drop-shadow(0 0 6px rgba(255, 200, 50, 1));
 }
 
 /* 时间轴空状态提示 */
@@ -4066,7 +4196,8 @@ pre {
 }
 
 .timeline-toolbar-center.compact-actions-on .tl-follow-btn,
-.timeline-toolbar-center.compact-actions-on .tl-thumb-btn {
+.timeline-toolbar-center.compact-actions-on .tl-thumb-btn,
+.timeline-toolbar-center.compact-actions-on .tl-waveform-btn {
     display: none;
 }
 
