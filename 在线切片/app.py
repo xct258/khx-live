@@ -12,11 +12,11 @@ from uuid import uuid4
 from pathlib import Path
 from typing import List, Optional
 from collections import deque
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Body, Form, File, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Body, Form, File, UploadFile # pyright: ignore[reportMissingImports]
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse # pyright: ignore[reportMissingImports]
+from fastapi.staticfiles import StaticFiles # pyright: ignore[reportMissingImports]
+from fastapi.templating import Jinja2Templates # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel, Field # pyright: ignore[reportMissingImports]
 
 try:
     import pty  # type: ignore
@@ -27,13 +27,13 @@ except Exception:  # pragma: no cover
 BASE_DIR = Path(__file__).parent.resolve()
 VIDEO_DIR = Path("/rec/videos")
 TMP_OUTPUT_DIR = BASE_DIR / "clips_tmp"
-OUTPUT_DIR = Path("/rec/videos/切片成品")
-# additional directory where completed files may be relocated after merge
-FINISHED_DIR = Path("/rec/videos/成品")
-# prefix included in returned paths that points to FINISHED_DIR
+# all final outputs now live in the finished directory; OUTPUT_DIR is aliased
+FINISHED_DIR = Path("/rec/videos/切片成品")
+OUTPUT_DIR = FINISHED_DIR
+# prefix included in returned paths that points to FINISHED_DIR (legacy compat)
 FINISHED_PREFIX = "成品/"
 
-COVER_DIR = OUTPUT_DIR / "covers"  # store uploaded cover images separately
+COVER_DIR = OUTPUT_DIR / "covers"  # store uploaded cover images separately (now same as finished dir)
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"
@@ -663,7 +663,7 @@ def sanitize_output_name(name: str) -> Path:
     """
     p = name.lstrip("/\\")
 
-    # explicit finished directory prefix takes precedence
+    # prefix handling remains for backwards compatibility, but everything lives under FINISHED_DIR now
     if p.startswith(FINISHED_PREFIX):
         rel = p[len(FINISHED_PREFIX):]
         path = (FINISHED_DIR / rel).resolve()
@@ -671,17 +671,9 @@ def sanitize_output_name(name: str) -> Path:
             raise HTTPException(400, "非法路径")
         return path
 
-    # otherwise try searching output then finished
-    for base in (OUTPUT_DIR, FINISHED_DIR):
-        cand = (base / p).resolve()
-        if not str(cand).startswith(str(base.resolve())):
-            continue
-        if cand.exists():
-            return cand
-
-    # no existing file; return safe OUTPUT_DIR candidate for proper error
-    path = (OUTPUT_DIR / p).resolve()
-    if not str(path).startswith(str(OUTPUT_DIR.resolve())):
+    # simply resolve against finished directory and return; ignore OUTPUT_DIR since it's the same
+    path = (FINISHED_DIR / p).resolve()
+    if not str(path).startswith(str(FINISHED_DIR.resolve())):
         raise HTTPException(400, "非法路径")
     return path
 
@@ -709,16 +701,12 @@ def _rel_output_path(path: Path) -> str:
     ``FINISHED_PREFIX`` so that clients know to look there.  Older state
     entries without the prefix remain supported.
     """
-    try:
-        rel = path.relative_to(OUTPUT_DIR)
-        return str(rel).replace("\\", "/")
-    except Exception:
-        pass
+    # every output lives inside FINISHED_DIR; ignore OUTPUT_DIR alias
     try:
         rel = path.relative_to(FINISHED_DIR)
         return FINISHED_PREFIX + str(rel).replace("\\", "/")
     except Exception:
-        # fallback to raw string if it's somehow outside both bases
+        # fallback if something is outside (unlikely)
         return str(path)
 
 
@@ -1103,6 +1091,124 @@ async def thumb_manifest_stream(
 
     return StreamingResponse(_iter_lines(), media_type="application/x-ndjson")
 
+
+# ------------------ 音频波形 ------------------
+WAVEFORM_CACHE_DIR = BASE_DIR / "waveform_cache"
+WAVEFORM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _waveform_cache_path(video_path: Path, duration: float, samples: int) -> Path:
+    base_name = video_path.name or "unknown-video"
+    safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", base_name).strip(" .")
+    if not safe_name:
+        safe_name = "unknown-video"
+    return WAVEFORM_CACHE_DIR / f"{safe_name}__{int(duration)}__{samples}.json"
+
+
+def _extract_waveform(video_path: Path, duration: float, samples: int) -> list[float]:
+    """Use ffmpeg to extract peak amplitude per sample bucket from the audio track."""
+    if duration <= 0 or samples <= 0:
+        return []
+
+    cache_file = _waveform_cache_path(video_path, duration, samples)
+    if cache_file.exists():
+        try:
+            data = json.loads(cache_file.read_text("utf-8"))
+            if isinstance(data, list) and len(data) == samples:
+                return data
+        except Exception:
+            pass
+
+    # Use ffmpeg astats filter to get per-frame peak levels; alternatively
+    # use "aformat" to downsample + raw PCM output to compute peaks ourselves.
+    # Fastest approach: decode audio to raw s16le mono, read peak per bucket.
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", str(video_path),
+        "-vn",              # no video
+        "-ac", "1",         # mono
+        "-ar", "8000",      # 8 kHz (enough for waveform visualisation)
+        "-f", "s16le",      # raw signed 16-bit little-endian
+        "-",                # stdout
+    ]
+
+    try:
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=max(30, duration / 4),
+        )
+        if res.returncode != 0 or not res.stdout:
+            return []
+    except Exception:
+        return []
+
+    import struct
+
+    raw = res.stdout
+    total_samples_raw = len(raw) // 2  # 2 bytes per s16le sample
+    if total_samples_raw == 0:
+        return []
+
+    bucket_size = max(1, total_samples_raw // samples)
+    peaks: list[float] = []
+
+    for i in range(samples):
+        start = i * bucket_size * 2
+        end = min(start + bucket_size * 2, len(raw))
+        if start >= len(raw):
+            peaks.append(0.0)
+            continue
+
+        chunk = raw[start:end]
+        n = len(chunk) // 2
+        if n == 0:
+            peaks.append(0.0)
+            continue
+
+        max_abs = 0
+        for j in range(n):
+            val = struct.unpack_from("<h", chunk, j * 2)[0]
+            a = abs(val)
+            if a > max_abs:
+                max_abs = a
+
+        peaks.append(round(max_abs / 32768.0, 4))
+
+    # normalise to 0..1
+    max_peak = max(peaks) if peaks else 0
+    if max_peak > 0:
+        peaks = [round(p / max_peak, 4) for p in peaks]
+
+    try:
+        cache_file.write_text(json.dumps(peaks, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+    return peaks
+
+
+@app.get("/api/waveform")
+async def waveform_api(name: str, samples: int = 800):
+    if not ffmpeg_exists():
+        raise HTTPException(status_code=500, detail="ffmpeg not found in PATH")
+
+    path = sanitize_name(name)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    samples = max(100, min(4000, int(samples or 800)))
+    duration = _ffprobe_duration(path)
+    if duration <= 0:
+        return {"peaks": [], "duration": 0, "samples": 0}
+
+    peaks = await asyncio.to_thread(_extract_waveform, path, duration, samples)
+    return {"peaks": peaks, "duration": duration, "samples": len(peaks)}
+
+
 # ------------------ 视频目录树 ------------------
 @app.get("/api/tree")
 async def video_tree(path: str = ""):
@@ -1272,7 +1378,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
     # 输出文件名改为：用户名-原本名字-时间戳.mp4，并放在用户子目录中
     out_basename_base = f"{username}-{body.out_basename or 'merged'}-{ts}"
     out_basename = out_basename_base
-    user_dir = OUTPUT_DIR / safe_user
+    user_dir = FINISHED_DIR / safe_user  # directly write into finished directory
     user_dir.mkdir(parents=True, exist_ok=True)
     out_path = user_dir / f"{out_basename}.mp4"
     # 避免覆盖同名文件（例如同一秒内连续提交）
@@ -1537,7 +1643,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
                     elif body.source_mode == "original":
                         # 目录结构: 括弧笑bilibili/压制版/... -> 括弧笑bilibili/原版/...
                         if parts and len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
-                            parts[1] = "原版"
+                            parts[1] = "原文件"
                         else:
                             raise HTTPException(400, f"无法识别压制版目录结构: {vid.name}")
 
@@ -1769,7 +1875,7 @@ async def get_clip(name: str):
     if not path.exists():
         raise HTTPException(404, "Clip not found")
     _increment_stat("download_count")
-    return FileResponse(path, filename=name)
+    return FileResponse(path, filename=path.name)
 
 
 @app.get("/api/stats")
