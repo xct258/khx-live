@@ -60,6 +60,11 @@ _merge_runtime_lock = threading.Lock()
 _merge_runtime_job_id: Optional[str] = None
 _merge_runtime_proc: Optional[subprocess.Popen] = None
 
+# ---- 合并任务队列 ----
+_merge_queue_lock = threading.Lock()
+_merge_queue: deque = deque()  # 排队中的任务: [{job_id, merge_token, username, videos, out_path, out_basename, total_seconds, total_clips, source_mode}]
+_merge_queue_condition = threading.Condition(_merge_queue_lock)
+
 _upload_runtime_lock = threading.Lock()
 _upload_runtime_proc: Optional[subprocess.Popen] = None
 
@@ -816,7 +821,6 @@ class MultiVideoRequest(BaseModel):
     out_basename: Optional[str] = None
     username: str  # 新增字段
     source_mode: str = "encode"  # encode | original
-    cut_mode: str = "fast"  # fast | precise
 
 class SliceJob(BaseModel):
     id: str
@@ -889,9 +893,35 @@ async def merge_status(merge_token: Optional[str] = None):
     state_token = str(state.get("merge_token") or "").strip()
     authed = bool(token and state_token and token == state_token)
 
-    # 未授权：不返回进度/输出/错误等信息（避免其他用户看到“合并进度条”等无意义信息）
+    # 未授权时：检查该 token 是否在队列中排队
     if not authed:
+        queue_info = _get_merge_queue_info_for_token(token)
+        if queue_info.get("queued"):
+            cur_eta_seconds = _estimate_eta_seconds(state) if state.get("running") else None
+            cur_eta_human = _format_eta_seconds(cur_eta_seconds)
+            return {
+                "running": False,
+                "queued": True,
+                "queue_position": queue_info["queue_position"],
+                "queue_length": queue_info["queue_length"],
+                "current_task_eta_seconds": cur_eta_seconds,
+                "current_task_eta_human": cur_eta_human,
+            }
         return {"running": False}
+
+    # 已授权用户也可能在队列中（比如自己提交的任务正在队列中）
+    queue_info = _get_merge_queue_info_for_token(token)
+    if queue_info.get("queued"):
+        cur_eta_seconds = _estimate_eta_seconds(state) if state.get("running") else None
+        cur_eta_human = _format_eta_seconds(cur_eta_seconds)
+        return {
+            "running": False,
+            "queued": True,
+            "queue_position": queue_info["queue_position"],
+            "queue_length": queue_info["queue_length"],
+            "current_task_eta_seconds": cur_eta_seconds,
+            "current_task_eta_human": cur_eta_human,
+        }
 
     eta_seconds = _estimate_eta_seconds(state)
     eta_human = _format_eta_seconds(eta_seconds)
@@ -901,6 +931,8 @@ async def merge_status(merge_token: Optional[str] = None):
         full["running"] = False
     full["eta_seconds"] = eta_seconds
     full["eta_human"] = eta_human
+    with _merge_queue_lock:
+        full["queue_length"] = len(_merge_queue)
     return full
 
 
@@ -911,11 +943,24 @@ async def cancel_merge(body: CancelMergeRequest = Body(...)):
     约束：服务只允许单任务运行。
     """
     state = _get_merge_state()
-    if state.get("running") is not True:
-        return {"ok": True, "status": "idle"}
 
     req_job_id = (getattr(body, "job_id", None) or "").strip()
     req_token = (getattr(body, "merge_token", None) or "").strip()
+
+    # 先尝试取消队列中的任务（包括自己排队中的任务）
+    if req_token:
+        with _merge_queue_lock:
+            for idx, entry in enumerate(_merge_queue):
+                if str(entry.get("merge_token") or "").strip() == req_token or (
+                    req_job_id and str(entry.get("job_id") or "").strip() == req_job_id
+                ):
+                    _merge_queue.remove(entry)
+                    return {"ok": True, "status": "cancelled", "queued": True}
+
+    # 如果没在队列中，则尝试取消正在运行的任务
+    if state.get("running") is not True:
+        return {"ok": True, "status": "idle"}
+
     cur_job_id = str(state.get("job_id") or "").strip()
     cur_token = str(state.get("merge_token") or "").strip()
 
@@ -1341,11 +1386,8 @@ async def get_dir_durations(path: str = ""):
 # ------------------ 批量合并 ------------------
 @app.post("/api/slice_merge_all")
 async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTasks = None):
-    # 按切割模式设置总时长上限（单位：秒） - fast: 120 分钟, precise: 30 分钟
-    if getattr(body, "cut_mode", "fast") == "precise":
-        MAX_TOTAL_SECONDS = 30 * 60
-    else:
-        MAX_TOTAL_SECONDS = 120 * 60
+    # 总时长上限（单位：秒） - precise: 30 分钟
+    MAX_TOTAL_SECONDS = 30 * 60
 
     # 空片段校验：避免前端误提交导致 ffmpeg 报错
     total_clips = sum(len(v.clips) for v in (body.videos or []))
@@ -1360,7 +1402,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
                 raise HTTPException(400, f"片段结束时间必须大于开始时间: {vid.name}")
             total_seconds += float(clip.end - clip.start)
 
-    # 总时长限制：按切割模式限制（fast: 120 分钟，precise: 30 分钟）
+    # 总时长限制：30 分钟
     if total_seconds > MAX_TOTAL_SECONDS:
         max_minutes = MAX_TOTAL_SECONDS // 60
         raise HTTPException(400, f"最终合并总时长不能超过{max_minutes}分钟（当前约 {int(total_seconds)} 秒）")
@@ -1395,470 +1437,507 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
     job = SliceJob(id=job_id, source="multiple", status="queued", out_path=rel_out)
     JOBS[job_id] = job
 
-    # ---- 全局并发限制 + 持久化写入 running 状态（同一把锁，避免竞争） ----
-    with _merge_state_lock:
-        cur_state = _read_merge_state_unlocked()
-        if cur_state.get("running") is True:
-            eta_human = _format_eta_seconds(_estimate_eta_seconds(cur_state))
-            msg = "已有合并任务正在进行中，请稍后再试"
-            if eta_human:
-                msg = f"{msg}（预计剩余：{eta_human}）"
-            raise HTTPException(status_code=409, detail=msg)
-        # record the output path relative to whichever base currently holds it
-        state = {
-            "running": True,
-            "job_id": job_id,
-            "merge_token": merge_token,
-            "username": username,
-            "status": "running",
-            "started_at": int(time.time()),
-            "out_file": _rel_output_path(out_path),
-            "stage": "queued",
-            "total_clips": int(total_clips),
-            "done_clips": 0,
-            "total_seconds": float(total_seconds),
-            "processed_seconds": 0.0,
-            "percent": 0.0,
-        }
-        _write_merge_state_unlocked(state)
+    # ---- 将任务加入合并队列 ----
+    queue_entry = {
+        "job_id": job_id,
+        "merge_token": merge_token,
+        "username": username,
+        "videos": body.videos,
+        "out_path": out_path,
+        "total_seconds": float(total_seconds),
+        "total_clips": int(total_clips),
+        "source_mode": body.source_mode,
+        "submitted_at": int(time.time()),
+    }
 
-    # 新任务启动：清理上一轮可能残留的取消标志/运行态
-    _merge_cancel_event.clear()
-    _set_merge_runtime(job_id=job_id, proc=None)
+    with _merge_queue_condition:
+        _merge_queue.append(queue_entry)
+        _merge_queue_condition.notify()
 
-    def run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_seconds_all: float, total_clips_all: int):
-        job.status = "running"
-        temp_files = []
-        list_file: Optional[Path] = None
-        processed_seconds = 0.0
-        done_clips = 0
+    return {"job_id": job_id, "out_file": job.out_path, "merge_token": merge_token}
 
-        # 运行线程启动时也写入运行态（便于取消时校验/诊断）
-        _set_merge_runtime(job_id=job.id, proc=None)
 
-        def _safe_percent(processed: float) -> float:
-            if not total_seconds_all or total_seconds_all <= 0:
-                return 0.0
-            p = processed / float(total_seconds_all)
-            if p < 0:
-                return 0.0
-            if p > 1:
-                return 1.0
-            return float(p)
+def _get_merge_queue_info_for_token(merge_token: str) -> dict:
+    """返回指定 token 在队列中的位置信息。"""
+    token = (merge_token or "").strip()
+    if not token:
+        return {}
+    with _merge_queue_lock:
+        for idx, entry in enumerate(_merge_queue):
+            if str(entry.get("merge_token") or "").strip() == token:
+                return {
+                    "queued": True,
+                    "queue_position": idx + 1,
+                    "queue_length": len(_merge_queue),
+                }
+    return {}
 
-        def _run_ffmpeg_with_progress(cmd: list, clip_duration: float, current_label: str):
-            """Run ffmpeg and periodically update merge_state.json using ffmpeg -progress output.
 
-            Rewritten for robustness while preserving cancellation and percent updates.
-            """
-            if _merge_cancel_event.is_set():
-                raise MergeCancelled("用户取消合并")
+def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_seconds_all: float, total_clips_all: int, source_mode: str = "encode"):
+    job.status = "running"
+    temp_files = []
+    list_file: Optional[Path] = None
+    processed_seconds = 0.0
+    done_clips = 0
 
-            def _stop_proc(p: subprocess.Popen) -> None:
-                try:
+    # 运行线程启动时也写入运行态（便于取消时校验/诊断）
+    _set_merge_runtime(job_id=job.id, proc=None)
+
+    def _safe_percent(processed: float) -> float:
+        if not total_seconds_all or total_seconds_all <= 0:
+            return 0.0
+        p = processed / float(total_seconds_all)
+        if p < 0:
+            return 0.0
+        if p > 1:
+            return 1.0
+        return float(p)
+
+    def _run_ffmpeg_with_progress(cmd: list, clip_duration: float, current_label: str):
+        """Run ffmpeg and periodically update merge_state.json using ffmpeg -progress output.
+
+        Rewritten for robustness while preserving cancellation and percent updates.
+        """
+        if _merge_cancel_event.is_set():
+            raise MergeCancelled("用户取消合并")
+
+        def _stop_proc(p: subprocess.Popen) -> None:
+            try:
+                if p.poll() is None:
+                    try:
+                        p.terminate()
+                    except Exception:
+                        pass
+                    for _ in range(25):
+                        if p.poll() is not None:
+                            break
+                        time.sleep(0.05)
                     if p.poll() is None:
                         try:
-                            p.terminate()
+                            p.kill()
                         except Exception:
                             pass
-                        for _ in range(25):
-                            if p.poll() is not None:
-                                break
-                            time.sleep(0.05)
-                        if p.poll() is None:
-                            try:
-                                p.kill()
-                            except Exception:
-                                pass
+            except Exception:
+                pass
+
+        # Prepare command and ensure -progress is present (avoid duplicate)
+        cmd_with_progress = list(cmd)
+        if "-progress" not in cmd_with_progress:
+            try:
+                insert_at = next(i for i, v in enumerate(cmd_with_progress) if v == "-i")
+            except StopIteration:
+                insert_at = len(cmd_with_progress)
+            cmd_with_progress[insert_at:insert_at] = [
+                "-loglevel", "error",
+                "-nostats",
+                "-progress", "pipe:1",
+            ]
+
+        last_update = 0.0
+        out_time_sec = 0.0
+        tail = deque(maxlen=200)
+
+        proc = subprocess.Popen(
+            cmd_with_progress,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+        )
+        _set_merge_runtime(proc=proc)
+        assert proc.stdout is not None
+
+        for raw_line in proc.stdout:
+            if _merge_cancel_event.is_set():
+                _stop_proc(proc)
+                try:
+                    proc.wait(timeout=0.5)
                 except Exception:
                     pass
+                raise MergeCancelled("用户取消合并")
 
-            # Prepare command and ensure -progress is present (avoid duplicate)
-            cmd_with_progress = list(cmd)
-            if "-progress" not in cmd_with_progress:
-                try:
-                    insert_at = next(i for i, v in enumerate(cmd_with_progress) if v == "-i")
-                except StopIteration:
-                    insert_at = len(cmd_with_progress)
-                cmd_with_progress[insert_at:insert_at] = [
-                    "-loglevel", "error",
-                    "-nostats",
-                    "-progress", "pipe:1",
-                ]
+            line = (raw_line or "").strip()
+            if line:
+                tail.append(line)
 
-            last_update = 0.0
-            out_time_sec = 0.0
-            tail = deque(maxlen=200)
+            # parse key=value progress lines (out_time_ms/out_time_us)
+            if "=" in line:
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k == "out_time_ms":
+                    try:
+                        out_time_sec = max(0.0, int(v) / 1_000_000.0)
+                    except Exception:
+                        pass
+                elif k == "out_time_us":
+                    try:
+                        out_time_sec = max(0.0, int(v) / 1_000_000.0)
+                    except Exception:
+                        pass
 
-            proc = subprocess.Popen(
-                cmd_with_progress,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
-            )
-            _set_merge_runtime(proc=proc)
-            assert proc.stdout is not None
+            # periodic state update (throttled)
+            now_mono = time.monotonic()
+            if now_mono - last_update >= 0.5:
+                effective = out_time_sec
+                if clip_duration and clip_duration > 0 and effective > clip_duration:
+                    effective = clip_duration
+                processed_now = processed_seconds + float(effective)
+                _update_merge_state(
+                    stage="slicing",
+                    current=current_label,
+                    total_clips=int(total_clips_all),
+                    done_clips=int(done_clips),
+                    total_seconds=float(total_seconds_all),
+                    processed_seconds=float(processed_now),
+                    percent=_safe_percent(processed_now),
+                )
+                last_update = now_mono
 
-            for raw_line in proc.stdout:
+        rc = proc.wait()
+        _set_merge_runtime(proc=None)
+
+        if _merge_cancel_event.is_set():
+            raise MergeCancelled("用户取消合并")
+
+        if rc != 0:
+            tail_txt = "\n".join(list(tail)[-60:])
+            raise RuntimeError("ffmpeg 失败：" + tail_txt)
+
+
+    def _run_ffmpeg_concat_with_cancel(cmd: list):
+        if _merge_cancel_event.is_set():
+            raise MergeCancelled("用户取消合并")
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+        )
+        _set_merge_runtime(proc=proc)
+
+        try:
+            while True:
                 if _merge_cancel_event.is_set():
-                    _stop_proc(proc)
+                    try:
+                        if proc.poll() is None:
+                            proc.terminate()
+                    except Exception:
+                        pass
                     try:
                         proc.wait(timeout=0.5)
                     except Exception:
                         pass
                     raise MergeCancelled("用户取消合并")
 
-                line = (raw_line or "").strip()
-                if line:
-                    tail.append(line)
-
-                # parse key=value progress lines (out_time_ms/out_time_us)
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    k = k.strip()
-                    v = v.strip()
-                    if k == "out_time_ms":
-                        try:
-                            out_time_sec = max(0.0, int(v) / 1_000_000.0)
-                        except Exception:
-                            pass
-                    elif k == "out_time_us":
-                        try:
-                            out_time_sec = max(0.0, int(v) / 1_000_000.0)
-                        except Exception:
-                            pass
-
-                # periodic state update (throttled)
-                now_mono = time.monotonic()
-                if now_mono - last_update >= 0.5:
-                    effective = out_time_sec
-                    if clip_duration and clip_duration > 0 and effective > clip_duration:
-                        effective = clip_duration
-                    processed_now = processed_seconds + float(effective)
-                    _update_merge_state(
-                        stage="slicing",
-                        current=current_label,
-                        total_clips=int(total_clips_all),
-                        done_clips=int(done_clips),
-                        total_seconds=float(total_seconds_all),
-                        processed_seconds=float(processed_now),
-                        percent=_safe_percent(processed_now),
-                    )
-                    last_update = now_mono
-
-            rc = proc.wait()
-            _set_merge_runtime(proc=None)
-
-            if _merge_cancel_event.is_set():
-                raise MergeCancelled("用户取消合并")
-
-            if rc != 0:
-                tail_txt = "\n".join(list(tail)[-60:])
-                raise RuntimeError("ffmpeg 失败：" + tail_txt)
-
-
-        def _run_ffmpeg_concat_with_cancel(cmd: list):
-            if _merge_cancel_event.is_set():
-                raise MergeCancelled("用户取消合并")
-
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
-            )
-            _set_merge_runtime(proc=proc)
-
-            try:
-                while True:
-                    if _merge_cancel_event.is_set():
-                        try:
-                            if proc.poll() is None:
-                                proc.terminate()
-                        except Exception:
-                            pass
-                        try:
-                            proc.wait(timeout=0.5)
-                        except Exception:
-                            pass
-                        raise MergeCancelled("用户取消合并")
-
-                    rc = proc.poll()
-                    if rc is not None:
-                        out, err = proc.communicate(timeout=0.2)
-                        
-                        if _merge_cancel_event.is_set():
-                            raise MergeCancelled("用户取消合并")
-
-                        if rc != 0:
-                            tail = (err or out or "").strip()
-                            if len(tail) > 4000:
-                                tail = tail[-4000:]
-                            raise RuntimeError("ffmpeg 合并失败：" + ("\n" + tail if tail else ""))
-                        return
-                    time.sleep(0.2)
-            finally:
-                _set_merge_runtime(proc=None)
-
-        try:
-            _update_merge_state(
-                status="running",
-                stage="slicing",
-                total_clips=int(total_clips_all),
-                done_clips=0,
-                total_seconds=float(total_seconds_all),
-                processed_seconds=0.0,
-                percent=0.0,
-            )
-
-            for vid_idx, vid in enumerate(videos):
-                if _merge_cancel_event.is_set():
-                    raise MergeCancelled("用户取消合并")
-                
-                # ----------------- 源文件版本替换逻辑（新版目录结构） -----------------
-                target_name = vid.name
-                # 如果前端传来的路径没带“括弧笑bilibili/压制版”，补上它以便后续替换逻辑生效
-                if target_name and not target_name.startswith("括弧笑bilibili"):
-                    if target_name.startswith("压制版") or target_name.startswith("原版"):
-                        target_name = "括弧笑bilibili/" + target_name
-                    else:
-                        target_name = "括弧笑bilibili/压制版/" + target_name
-                
-                p = Path(target_name)
-
-                if p.name.startswith(PREVIEW_PREFIX):
-
-                    bare_name = p.name[len(PREVIEW_PREFIX):]  # 去掉“预览版-”
-                    parts = list(p.parts)  # ['括弧笑bilibili','压制版','2026','02','22','预览版-1.mp4']
-
-                    if body.source_mode == "encode":
-                        # 压制版目录保持不变，只替换文件名前缀
-                        new_filename = ENCODE_PREFIX + bare_name
-                        new_path = Path(*parts).parent / new_filename
-
-                    elif body.source_mode == "original":
-                        # 目录结构: 括弧笑bilibili/压制版/... -> 括弧笑bilibili/原版/...
-                        if parts and len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
-                            parts[1] = "原文件"
-                        else:
-                            raise HTTPException(400, f"无法识别压制版目录结构: {vid.name}")
-
-                        new_filename = bare_name  # 原版没有前缀
-                        new_path = Path(*parts).parent / new_filename
-
-                    else:
-                        raise HTTPException(400, f"unsupported source_mode: {body.source_mode}")
-
-                    target_name = str(new_path).replace("\\", "/")
-                src = sanitize_name(target_name)
-                if not src.exists():
-                    raise FileNotFoundError(f"找不到源文件 (模式: {body.source_mode}): {target_name}")
-                for i, clip in enumerate(vid.clips):
-                    if _merge_cancel_event.is_set():
-                        raise MergeCancelled("用户取消合并")
-                    if clip.end <= clip.start:
-                        raise ValueError(f"Clip end <= start in {vid.name}")
-                    tmp = TMP_OUTPUT_DIR / f"{job.id}_{vid_idx}_{i}.ts"
-                    # 先加入清理列表：避免取消/失败发生在 temp_files.append 之前导致残留
-                    if tmp not in temp_files:
-                        temp_files.append(tmp)
-                    duration = clip.end - clip.start
+                rc = proc.poll()
+                if rc is not None:
+                    out, err = proc.communicate(timeout=0.2)
                     
-                    # 根据切割模式选择不同的编码策略
-                    cut_mode = getattr(body, "cut_mode", "fast")
+                    if _merge_cancel_event.is_set():
+                        raise MergeCancelled("用户取消合并")
 
-                    if cut_mode == "precise":
-                        # 精准切割（优化性能）：采用 "预跳（input -ss）+ 精调（post -ss）" 的混合策略。
-                        fast_seek = max(0.0, float(clip.start) - 1.0)
-                        delta = float(clip.start) - fast_seek
-
-                        cmd = ["ffmpeg", "-y"]
-                        if fast_seek > 0:
-                            cmd += ["-ss", f"{fast_seek:.3f}"]
-                        cmd += ["-i", str(src)]
-                        if delta > 0:
-                            cmd += ["-ss", f"{delta:.3f}"]
-                        cmd += [
-                            "-t", f"{float(duration):.3f}",
-                            "-c:v", "libx264",
-                            "-preset", "veryfast",
-                            "-crf", "23",
-                            "-pix_fmt", "yuv420p",
-                            "-c:a", "copy",
-                            "-avoid_negative_ts", "1",
-                            "-f", "mpegts",
-                            str(tmp)
-                        ]
-                    else:
-                        # 快速切割：使用 ffmpeg 流复制（更快但切点为关键帧对齐）
-                        cmd = [
-                            "ffmpeg", "-y",
-                            "-ss", f"{float(clip.start):.3f}",
-                            "-i", str(src),
-                            "-t", f"{float(duration):.3f}",
-                            "-c", "copy",
-                            "-avoid_negative_ts", "1",
-                            "-f", "mpegts",
-                            str(tmp)
-                        ]
-
-                    current_label = f"{vid.name} 片段 {i+1}/{len(vid.clips)}"
-                    _update_merge_state(
-                        stage="slicing",
-                        current=current_label,
-                        total_clips=int(total_clips_all),
-                        done_clips=int(done_clips),
-                        total_seconds=float(total_seconds_all),
-                        processed_seconds=float(processed_seconds),
-                        percent=_safe_percent(processed_seconds),
-                    )
-
-                    _run_ffmpeg_with_progress(cmd, float(duration), current_label)
-
-                    done_clips += 1
-                    processed_seconds += float(duration)
-                    _update_merge_state(
-                        stage="slicing",
-                        current=current_label,
-                        total_clips=int(total_clips_all),
-                        done_clips=int(done_clips),
-                        total_seconds=float(total_seconds_all),
-                        processed_seconds=float(processed_seconds),
-                        percent=_safe_percent(processed_seconds),
-                    )
-            
-            list_file = TMP_OUTPUT_DIR / f"{job.id}_list.txt"
-            with list_file.open("w", encoding="utf-8") as f:
-                for tmp in temp_files:
-                    f.write(f"file '{tmp.name}'\n")
-
-            _update_merge_state(
-                stage="merging",
-                current="合并中",
-                percent=max(_safe_percent(processed_seconds), 0.98),
-            )
-
-            cmd_concat = ["ffmpeg","-hide_banner","-y","-f","concat","-safe","0","-i",str(list_file),"-c","copy","-bsf:a","aac_adtstoasc",str(out_path)]
-            _run_ffmpeg_concat_with_cancel(cmd_concat)
-            job.status = "done"
-
-            # ---------- new feature: relocate merged result to finished directory ----------
-            try:
-                dest_base = FINISHED_DIR
-                dest_base.mkdir(parents=True, exist_ok=True)
-                try:
-                    rel = out_path.relative_to(OUTPUT_DIR)
-                except Exception:
-                    rel = out_path.name
-                dest = dest_base / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(out_path), str(dest))
-                out_path = dest
-            except Exception:
-                # moving is best-effort; failure should not break the job
-                pass
-
-            # compute the path string that will be sent to frontend
-            rel_out = _rel_output_path(out_path)
-            job.out_path = rel_out
-
-            _update_merge_state(
-                running=False,
-                status="done",
-                stage="done",
-                current=None,
-                finished_at=int(time.time()),
-                out_file=rel_out,
-                percent=1.0,
-                error=None,
-            )
-            _increment_stat("merge_success_count")
-        except Exception as e:
-            if isinstance(e, MergeCancelled):
-                job.status = "cancelled"
-                job.error = str(e)
-                _update_merge_state(
-                    running=False,
-                    status="cancelled",
-                    stage="cancelled",
-                    current=None,
-                    finished_at=int(time.time()),
-                    out_file=None,
-                    percent=_safe_percent(processed_seconds),
-                    error=str(e),
-                )
-            else:
-                job.status = "error"
-                job.error = str(e)
-                _update_merge_state(
-                    running=False,
-                    status="error",
-                    stage="error",
-                    current=None,
-                    finished_at=int(time.time()),
-                    out_file=str(out_path.relative_to(OUTPUT_DIR)),
-                    percent=_safe_percent(processed_seconds),
-                    error=str(e),
-                )
+                    if rc != 0:
+                        tail = (err or out or "").strip()
+                        if len(tail) > 4000:
+                            tail = tail[-4000:]
+                        raise RuntimeError("ffmpeg 合并失败：" + ("\n" + tail if tail else ""))
+                    return
+                time.sleep(0.2)
         finally:
             _set_merge_runtime(proc=None)
-            _merge_cancel_event.clear()
 
-            def _unlink_with_retries(p: Path, retries: int = 20, delay: float = 0.1) -> None:
-                for _ in range(max(1, retries)):
-                    try:
-                        if p.exists():
-                            p.unlink()
-                        return
-                    except Exception:
-                        time.sleep(delay)
+    try:
+        _update_merge_state(
+            status="running",
+            stage="slicing",
+            total_clips=int(total_clips_all),
+            done_clips=0,
+            total_seconds=float(total_seconds_all),
+            processed_seconds=0.0,
+            percent=0.0,
+        )
 
-            # 取消时：删除可能已经产生的半成品输出文件
-            if getattr(job, "status", None) == "cancelled":
-                try:
-                    if out_path is not None and out_path.exists():
-                        _unlink_with_retries(out_path)
-                except Exception:
-                    pass
+        for vid_idx, vid in enumerate(videos):
+            if _merge_cancel_event.is_set():
+                raise MergeCancelled("用户取消合并")
+            
+            # ----------------- 源文件版本替换逻辑（新版目录结构） -----------------
+            target_name = vid.name
+            # 如果前端传来的路径没带“括弧笑bilibili/压制版”，补上它以便后续替换逻辑生效
+            if target_name and not target_name.startswith("括弧笑bilibili"):
+                if target_name.startswith("压制版") or target_name.startswith("原版"):
+                    target_name = "括弧笑bilibili/" + target_name
+                else:
+                    target_name = "括弧笑bilibili/压制版/" + target_name
+            
+            p = Path(target_name)
 
-            cleanup_targets = list(temp_files)
-            if list_file is not None:
-                cleanup_targets.append(list_file)
+            if p.name.startswith(PREVIEW_PREFIX):
 
-            # 兜底：按 job_id 模式把可能遗漏的临时文件也删掉（例如取消发生在写入列表之前）
+                bare_name = p.name[len(PREVIEW_PREFIX):]  # 去掉“预览版-”
+                parts = list(p.parts)  # ['括弧笑bilibili','压制版','2026','02','22','预览版-1.mp4']
+
+                if source_mode == "encode":
+                    # 压制版目录保持不变，只替换文件名前缀
+                    new_filename = ENCODE_PREFIX + bare_name
+                    new_path = Path(*parts).parent / new_filename
+
+                elif source_mode == "original":
+                    # 目录结构: 括弧笑bilibili/压制版/... -> 括弧笑bilibili/原版/...
+                    if parts and len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
+                        parts[1] = "原文件"
+                    else:
+                        raise HTTPException(400, f"无法识别压制版目录结构: {vid.name}")
+
+                    new_filename = bare_name  # 原版没有前缀
+                    new_path = Path(*parts).parent / new_filename
+
+                else:
+                    raise HTTPException(400, f"unsupported source_mode: {source_mode}")
+
+                target_name = str(new_path).replace("\\", "/")
+            src = sanitize_name(target_name)
+            if not src.exists():
+                raise FileNotFoundError(f"找不到源文件 (模式: {source_mode}): {target_name}")
+            for i, clip in enumerate(vid.clips):
+                if _merge_cancel_event.is_set():
+                    raise MergeCancelled("用户取消合并")
+                if clip.end <= clip.start:
+                    raise ValueError(f"Clip end <= start in {vid.name}")
+                tmp = TMP_OUTPUT_DIR / f"{job.id}_{vid_idx}_{i}.ts"
+                # 先加入清理列表：避免取消/失败发生在 temp_files.append 之前导致残留
+                if tmp not in temp_files:
+                    temp_files.append(tmp)
+                duration = clip.end - clip.start
+                
+                # 精准切割（优化性能）：采用 "预跳（input -ss）+ 精调（post -ss）" 的混合策略。
+                fast_seek = max(0.0, float(clip.start) - 1.0)
+                delta = float(clip.start) - fast_seek
+
+                cmd = ["ffmpeg", "-y"]
+                if fast_seek > 0:
+                    cmd += ["-ss", f"{fast_seek:.3f}"]
+                cmd += ["-i", str(src)]
+                if delta > 0:
+                    cmd += ["-ss", f"{delta:.3f}"]
+                cmd += [
+                    "-t", f"{float(duration):.3f}",
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "23",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "copy",
+                    "-avoid_negative_ts", "1",
+                    "-f", "mpegts",
+                    str(tmp)
+                ]
+
+                current_label = f"{vid.name} 片段 {i+1}/{len(vid.clips)}"
+                _update_merge_state(
+                    stage="slicing",
+                    current=current_label,
+                    total_clips=int(total_clips_all),
+                    done_clips=int(done_clips),
+                    total_seconds=float(total_seconds_all),
+                    processed_seconds=float(processed_seconds),
+                    percent=_safe_percent(processed_seconds),
+                )
+
+                _run_ffmpeg_with_progress(cmd, float(duration), current_label)
+
+                done_clips += 1
+                processed_seconds += float(duration)
+                _update_merge_state(
+                    stage="slicing",
+                    current=current_label,
+                    total_clips=int(total_clips_all),
+                    done_clips=int(done_clips),
+                    total_seconds=float(total_seconds_all),
+                    processed_seconds=float(processed_seconds),
+                    percent=_safe_percent(processed_seconds),
+                )
+        
+        list_file = TMP_OUTPUT_DIR / f"{job.id}_list.txt"
+        with list_file.open("w", encoding="utf-8") as f:
+            for tmp in temp_files:
+                f.write(f"file '{tmp.name}'\n")
+
+        _update_merge_state(
+            stage="merging",
+            current="合并中",
+            percent=max(_safe_percent(processed_seconds), 0.98),
+        )
+
+        cmd_concat = ["ffmpeg","-hide_banner","-y","-f","concat","-safe","0","-i",str(list_file),"-c","copy","-bsf:a","aac_adtstoasc",str(out_path)]
+        _run_ffmpeg_concat_with_cancel(cmd_concat)
+        job.status = "done"
+
+        # ---------- new feature: relocate merged result to finished directory ----------
+        try:
+            dest_base = FINISHED_DIR
+            dest_base.mkdir(parents=True, exist_ok=True)
             try:
-                for p in TMP_OUTPUT_DIR.glob(f"{job.id}_*.ts"):
-                    cleanup_targets.append(p)
-                for p in TMP_OUTPUT_DIR.glob(f"{job.id}_list.txt"):
-                    cleanup_targets.append(p)
+                rel = out_path.relative_to(OUTPUT_DIR)
+            except Exception:
+                rel = out_path.name
+            dest = dest_base / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(out_path), str(dest))
+            out_path = dest
+        except Exception:
+            # moving is best-effort; failure should not break the job
+            pass
+
+        # compute the path string that will be sent to frontend
+        rel_out = _rel_output_path(out_path)
+        job.out_path = rel_out
+
+        _update_merge_state(
+            running=False,
+            status="done",
+            stage="done",
+            current=None,
+            finished_at=int(time.time()),
+            out_file=rel_out,
+            percent=1.0,
+            error=None,
+        )
+        _increment_stat("merge_success_count")
+    except Exception as e:
+        if isinstance(e, MergeCancelled):
+            job.status = "cancelled"
+            job.error = str(e)
+            _update_merge_state(
+                running=False,
+                status="cancelled",
+                stage="cancelled",
+                current=None,
+                finished_at=int(time.time()),
+                out_file=None,
+                percent=_safe_percent(processed_seconds),
+                error=str(e),
+            )
+        else:
+            job.status = "error"
+            job.error = str(e)
+            _update_merge_state(
+                running=False,
+                status="error",
+                stage="error",
+                current=None,
+                finished_at=int(time.time()),
+                out_file=str(out_path.relative_to(OUTPUT_DIR)),
+                percent=_safe_percent(processed_seconds),
+                error=str(e),
+            )
+    finally:
+        _set_merge_runtime(proc=None)
+        _merge_cancel_event.clear()
+
+        def _unlink_with_retries(p: Path, retries: int = 20, delay: float = 0.1) -> None:
+            for _ in range(max(1, retries)):
+                try:
+                    if p.exists():
+                        p.unlink()
+                    return
+                except Exception:
+                    time.sleep(delay)
+
+        # 取消时：删除可能已经产生的半成品输出文件
+        if getattr(job, "status", None) == "cancelled":
+            try:
+                if out_path is not None and out_path.exists():
+                    _unlink_with_retries(out_path)
             except Exception:
                 pass
 
-            # 去重
-            seen = set()
-            uniq_targets: list[Path] = []
-            for p in cleanup_targets:
-                try:
-                    key = str(p)
-                except Exception:
-                    continue
-                if key in seen:
-                    continue
-                seen.add(key)
-                uniq_targets.append(p)
+        cleanup_targets = list(temp_files)
+        if list_file is not None:
+            cleanup_targets.append(list_file)
 
-            for tmp in uniq_targets:
-                try:
-                    _unlink_with_retries(tmp)
-                except Exception:
-                    pass
-    
-    bg.add_task(run_merge, job, body.videos, out_path, float(total_seconds), int(total_clips))
-    return {"job_id": job_id, "out_file": job.out_path, "merge_token": merge_token}
+        # 兜底：按 job_id 模式把可能遗漏的临时文件也删掉（例如取消发生在写入列表之前）
+        try:
+            for p in TMP_OUTPUT_DIR.glob(f"{job.id}_*.ts"):
+                cleanup_targets.append(p)
+            for p in TMP_OUTPUT_DIR.glob(f"{job.id}_list.txt"):
+                cleanup_targets.append(p)
+        except Exception:
+            pass
+
+        # 去重
+        seen = set()
+        uniq_targets: list[Path] = []
+        for p in cleanup_targets:
+            try:
+                key = str(p)
+            except Exception:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq_targets.append(p)
+
+        for tmp in uniq_targets:
+            try:
+                _unlink_with_retries(tmp)
+            except Exception:
+                pass
+
+
+def _merge_queue_worker():
+    """后台工作线程：从队列中取任务并逐个执行合并。"""
+    while True:
+        with _merge_queue_condition:
+            while len(_merge_queue) == 0:
+                _merge_queue_condition.wait()
+            entry = _merge_queue.popleft()
+
+        job_id = entry["job_id"]
+        merge_token = entry["merge_token"]
+        username = entry["username"]
+        videos = entry["videos"]
+        out_path = entry["out_path"]
+        total_seconds = entry["total_seconds"]
+        total_clips = entry["total_clips"]
+        source_mode_val = entry.get("source_mode", "encode")
+
+        job = JOBS.get(job_id)
+        if job is None:
+            continue
+
+        # 写入 running 状态
+        _merge_cancel_event.clear()
+        _set_merge_runtime(job_id=job_id, proc=None)
+
+        with _merge_state_lock:
+            state = {
+                "running": True,
+                "job_id": job_id,
+                "merge_token": merge_token,
+                "username": username,
+                "status": "running",
+                "started_at": int(time.time()),
+                "out_file": _rel_output_path(out_path),
+                "stage": "queued",
+                "total_clips": int(total_clips),
+                "done_clips": 0,
+                "total_seconds": float(total_seconds),
+                "processed_seconds": 0.0,
+                "percent": 0.0,
+            }
+            _write_merge_state_unlocked(state)
+
+        _run_merge(job, videos, out_path, float(total_seconds), int(total_clips), source_mode_val)
+
+
+# 启动合并队列工作线程
+_merge_queue_worker_thread = threading.Thread(target=_merge_queue_worker, daemon=True)
+_merge_queue_worker_thread.start()
 
 
 @app.get("/api/job/{job_id}")

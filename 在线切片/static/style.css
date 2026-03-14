@@ -973,28 +973,57 @@ button:active {
 .merge-result-card {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    padding: 24px;
+    border-radius: 14px;
+    padding: 24px 20px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: 8px;
+    gap: 14px;
+    width: 100%;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-    max-width: 90%;
-    width: 400px;
+}
+
+.merge-result-icon {
+    font-size: 36px;
+    line-height: 1;
+    text-align: center;
+    margin-bottom: 2px;
 }
 
 .merge-result-title {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 800;
     color: #fff;
-    margin-bottom: 4px;
+    text-align: center;
 }
 
 .merge-result-sub {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.6);
+    text-align: center;
+}
+
+.merge-result-filename {
+    font-family: 'Consolas', monospace;
+    font-size: 13px;
+    color: #a5d6a7;
+    word-break: break-all;
+    line-height: 1.5;
+    text-align: center;
+    user-select: all;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.merge-result-warning {
+    color: #ff8080;
+    font-size: 12px;
+    background: rgba(255, 0, 0, 0.1);
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 80, 80, 0.15);
+    text-align: center;
 }
 
 .clear-choice-group {
@@ -1002,7 +1031,7 @@ button:active {
     gap: 10px;
     justify-content: center;
     flex-wrap: wrap;
-    margin-top: 4px;
+    margin-top: 2px;
 }
 
 
@@ -1029,39 +1058,30 @@ button:active {
     /* Easier selection */
 }
 
-/* Responsive actions layout: desktop — inline compact grid; mobile — stacked full-width */
+/* Responsive actions layout */
 .merge-result-actions {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: auto;
+    display: flex;
     gap: 8px;
     justify-content: center;
-    justify-items: center;
-    align-items: center;
-    width: auto;
-    margin: 4px auto 0;
+    width: 100%;
 }
 
-/* 按钮文字居中：水平 + 垂直居中，移动端保持居中并占满宽度 */
 .merge-result-actions button,
 #downloadClipBtn,
 #copyClipLinkBtn {
+    flex: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     text-align: center;
     gap: 6px;
     white-space: nowrap;
+    min-width: 0;
 }
 
 @media (max-width: 520px) {
     .merge-result-actions {
-        grid-auto-flow: row;
-        grid-template-columns: 1fr;
-        justify-items: stretch;
-        gap: 10px;
-        width: 100%;
-        margin-top: 10px;
+        flex-direction: column;
     }
 
     .merge-result-actions button,
@@ -1073,6 +1093,14 @@ button:active {
 
 
 
+.merge-result-card.error {
+    border-color: rgba(255, 80, 80, 0.15);
+}
+
+.merge-result-card.error .merge-result-title {
+    color: #ff9999;
+}
+
 .merge-result-card.error .merge-result-path {
     color: #ff8080;
 }
@@ -1081,8 +1109,8 @@ button:active {
     width: 100%;
     margin-top: 0;
     padding: 12px;
-    background: rgba(255, 50, 50, 0.1);
-    border: 1px solid rgba(255, 80, 80, 0.2);
+    background: rgba(255, 50, 50, 0.08);
+    border: 1px solid rgba(255, 80, 80, 0.15);
     border-radius: 10px;
     color: #ffcccc;
     font-family: monospace;
@@ -1096,16 +1124,6 @@ button:active {
 
 .merge-result-form {
     margin-top: 12px;
-}
-
-.merge-result-error {
-    margin-top: 10px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    background: rgba(255, 100, 100, 0.10);
-    border: 1px solid rgba(255, 120, 120, 0.18);
-    white-space: pre-wrap;
-    word-break: break-word;
 }
 
 .merge-status-bar-fill {
@@ -1383,8 +1401,6 @@ pre {
 /* 维持控制区整体透明观感（仅缩略图保持不透明） */
 #videoControlsContainer>.progress-row,
 #videoControlsContainer>.buttons-row,
-#videoControlsContainer>.clip-ctrl-bar,
-#videoControlsContainer .timeline-container-title,
 #videoControlsContainer .timeline-clip,
 #videoControlsContainer .timeline-selection,
 #videoControlsContainer .timeline-playhead,
@@ -1596,6 +1612,15 @@ pre {
     }
 }
 
+/* smooth opacity changes for control container; dimmed by default until JS marks ready */
+#videoControlsContainer.video-controls {
+    opacity: 0.5;
+    transition: opacity 200ms ease;
+}
+#videoControlsContainer.video-controls.ready {
+    opacity: 1;
+}
+
 /* videoControlsContainer 自适应压缩：宽度或高度不足时缩小内部元素 */
 @media (max-width: 760px),
 (max-height: 760px) {
@@ -1625,66 +1650,8 @@ pre {
         max-width: 170px;
     }
 
-    #videoControlsContainer .clip-ctrl-bar {
-        gap: 4px;
-        margin-top: 4px;
-    }
 
-    #videoControlsContainer .clip-ctrl-mark {
-        padding: 4px 5px;
-        font-size: 10px;
-    }
 
-    #videoControlsContainer .clip-ctrl-mark-label {
-        font-size: 9px;
-    }
-
-    #videoControlsContainer .clip-ctrl-mark-time {
-        font-size: 11px;
-    }
-
-    #videoControlsContainer .clip-ctrl-action {
-        padding: 4px 10px;
-        font-size: 11px;
-    }
-
-    #videoControlsContainer .timeline-in-controls {
-        margin: 4px 0 1px;
-    }
-
-    #videoControlsContainer .timeline-in-controls .timeline-container {
-        padding: 6px 8px 5px;
-    }
-
-    #videoControlsContainer .timeline-in-controls .timeline-track {
-        height: 40px;
-    }
-
-    #videoControlsContainer .timeline-in-controls .timeline-selection {
-        top: 2px;
-        height: 33px;
-    }
-
-    #videoControlsContainer .timeline-toolbar,
-    #videoControlsContainer .timeline-toolbar-left,
-    #videoControlsContainer .timeline-toolbar-center,
-    #videoControlsContainer .timeline-toolbar-right {
-        gap: 6px;
-    }
-
-    #videoControlsContainer .tl-zoom-btn {
-        font-size: 10px;
-        padding: 3px 8px;
-    }
-
-    #videoControlsContainer .tl-zoom-toggle {
-        min-width: 58px;
-    }
-
-    #videoControlsContainer .tl-zoom-menu-item {
-        font-size: 10px;
-        padding: 4px 8px;
-    }
 }
 
 @media (max-width: 560px),
@@ -1708,27 +1675,6 @@ pre {
         max-width: 140px;
     }
 
-    #videoControlsContainer .clip-ctrl-action {
-        padding: 3px 8px;
-        font-size: 10px;
-    }
-
-    #videoControlsContainer .timeline-in-controls .timeline-track {
-        height: 36px;
-    }
-
-    #videoControlsContainer .timeline-in-controls .timeline-selection {
-        height: 30px;
-    }
-
-    #videoControlsContainer .tl-zoom-btn {
-        font-size: 10px;
-        padding: 3px 7px;
-    }
-
-    #videoControlsContainer .tl-zoom-toggle {
-        min-width: 52px;
-    }
 }
 
 .icon-btn {
@@ -1850,16 +1796,6 @@ pre {
     pointer-events: none !important;
 }
 
-#speedSelectGroup {
-    position: relative;
-}
-
-#speedSelectGroup .tl-zoom-menu {
-    left: auto;
-    right: 0;
-    z-index: 60;
-}
-
 
 #playerWrapper:fullscreen {
     background: #000;
@@ -1922,6 +1858,11 @@ pre {
 
 #playerWrapper:fullscreen .video-controls:hover {
     opacity: 1;
+}
+
+/* 全屏时隐藏"选择视频"按钮 */
+#playerWrapper:fullscreen .select-video-btn {
+    display: none !important;
 }
 
 
@@ -2157,158 +2098,178 @@ pre {
     opacity: 1;
 }
 
-/* 进度弹窗专用：限制最大高度 + 内容滚动 */
-#progressModalOverlay .modal {
+/* ===================== 进度弹窗 (.progress-modal) ===================== */
+.progress-modal {
+    width: min(520px, calc(100vw - 40px));
     max-height: calc(100vh - 80px);
     display: flex;
     flex-direction: column;
-    /* start hidden to allow fade-in */
     opacity: 0;
     transition: opacity 0.3s ease;
 }
 
-#progressModalOverlay.show .modal {
+#progressModalOverlay.show .progress-modal {
     opacity: 1;
 }
 
-/* exit animation state */
-#progressModalOverlay.hiding .modal {
+#progressModalOverlay.hiding .progress-modal {
     opacity: 0;
 }
 
 #progressModalOverlay.hiding {
     display: flex;
-    /* keep visible until animation ends */
     pointer-events: none;
 }
 
-#progressModalOverlay .modal-header {
+/* header */
+.progress-modal-header {
+    flex: 0 0 auto;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    padding: 14px 20px 10px;
+    font-size: 15px;
+    font-weight: 700;
 }
 
+/* body: 内容区可滚动，子元素居中 */
 #progressModalBody {
-    overflow-y: auto;
-    /* 移除底部内边距，使滚动到底部时不出现额外空白；将主体设为伸缩区域 */
-    padding: 12px 20px 0 20px;
     flex: 1 1 auto;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding: 16px 20px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    /* center contents horizontally */
     gap: 12px;
 }
 
-/* ------------------ 进度详情卡片 (MP) ------------------ */
-/* ------------------ 进度详情卡片 (MP) Refreshed ------------------ */
-.mp-card {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    padding: 0;
-    /* 移除内边距，利用 modal-body 的内边距 */
+/* 内部卡片撑满可用宽度 */
+#progressModalBody > * {
+    width: 100%;
+    max-width: 100%;
+}
+
+/*
+ * 结果态（result-locked）：不滚动，内容居中展示。
+ * 核心思路：取消卡片独立外观，复用 modal 自身容器，省掉双重 padding。
+ */
+#progressModalOverlay.result-locked #progressModalBody {
+    overflow: hidden;
+    scrollbar-gutter: auto;
+    justify-content: center;
+    padding: 12px 24px 16px;
+}
+
+/* 结果态下卡片融入 modal，移除独立外观 */
+#progressModalOverlay.result-locked .merge-result-card {
     background: none;
     border: none;
     box-shadow: none;
-}
-
-.mp-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
+    border-radius: 0;
     padding: 0;
-    /* 对齐到边缘 */
+    gap: 10px;
 }
 
-.mp-stage {
-    font-size: 28px;
-    font-weight: 800;
-    line-height: 1.1;
-    letter-spacing: -0.5px;
-    background: linear-gradient(135deg, #fff 0%, #ccc 100%);
-    background-clip: text;
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+/* 图标紧凑 */
+#progressModalOverlay.result-locked .merge-result-icon {
+    font-size: 32px;
+    margin-bottom: 0;
 }
 
-.mp-percent {
-    font-size: 42px;
-    font-weight: 900;
-    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    color: var(--accent-color);
-    line-height: 0.9;
-    letter-spacing: -1px;
-    text-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.3);
-}
-
-.mp-bar-wrapper {
-    width: 100%;
-    height: 12px;
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 6px;
+/* 文件名最多两行，超出截断 */
+#progressModalOverlay.result-locked .merge-result-filename {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    position: relative;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+    text-overflow: ellipsis;
+    padding: 6px 10px;
+    font-size: 12px;
 }
 
-.mp-bar-fill {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 0%;
-    min-width: 6px;
-    border-radius: 6px;
-    background: linear-gradient(90deg, var(--accent-color), #6fc3ff);
-    background-size: 200% 100%;
-    animation: mpBarShimmer 2s linear infinite;
-    box-shadow: 0 0 16px rgba(79, 158, 255, 0.4);
-    transition: width 300ms cubic-bezier(0.25, 0.8, 0.25, 1);
+/* 错误日志单独可滚动，限高 */
+#progressModalOverlay.result-locked .merge-result-error {
+    max-height: 120px;
+    overflow-y: auto;
+    flex-shrink: 1;
+    min-height: 40px;
 }
 
-@keyframes mpBarShimmer {
-    0% {
-        background-position: 100% 0;
+/* 按钮和选项不可压缩 */
+#progressModalOverlay.result-locked .merge-result-actions,
+#progressModalOverlay.result-locked .clear-choice-group {
+    flex-shrink: 0;
+}
+
+/* 超小屏幕进一步紧凑 */
+@media (max-height: 500px) {
+    #progressModalOverlay.result-locked #progressModalBody {
+        padding: 8px 16px 12px;
+        gap: 6px;
     }
 
-    100% {
-        background-position: -100% 0;
+    #progressModalOverlay.result-locked .merge-result-card {
+        gap: 6px;
+    }
+
+    #progressModalOverlay.result-locked .merge-result-icon {
+        font-size: 24px;
+    }
+
+    #progressModalOverlay.result-locked .merge-result-title {
+        font-size: 16px;
+    }
+
+    #progressModalOverlay.result-locked .merge-result-error {
+        max-height: 80px;
     }
 }
 
-.mp-details {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 16px;
-    padding: 20px;
-}
-
-.mp-stat-item {
+/* footer: 固定在底部，与内容区保持视觉分隔 */
+.progress-modal-footer {
+    flex: 0 0 auto;
+    padding: 12px 20px 16px;
+    border-top: 1px solid var(--border-color);
     display: flex;
-    flex-direction: column;
+    justify-content: center;
+}
+
+/* checkbox inside action row */
+.modal-actions label {
+    display: inline-flex;
+    align-items: center;
     gap: 4px;
-}
-
-.mp-label {
+    margin-right: auto;
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.5);
-    font-weight: 500;
 }
 
-.mp-value {
-    font-size: 16px;
-    font-weight: 700;
-    color: #fff;
-    font-variant-numeric: tabular-nums;
+/* remove leftover modal-extra rule if any */
+#modalExtra { display: none !important; }
+
+
+.progress-modal-footer .modal-btn-danger {
+    width: 100%;
 }
 
-.mp-action {
-    display: none;
-    /* Hide old container if any */
+@media (max-width: 480px) {
+    .progress-modal {
+        width: calc(100vw - 24px);
+        max-height: calc(100vh - 48px);
+    }
+
+    .progress-modal-header {
+        padding: 12px 16px 8px;
+    }
+
+    #progressModalBody {
+        padding: 12px 16px;
+    }
+
+    .progress-modal-footer {
+        padding: 10px 16px 14px;
+    }
 }
 
 /* 危险操作按钮（红色） */
@@ -2940,6 +2901,7 @@ pre {
     box-shadow: none;
     padding: 0;
     margin: 0;
+    width: 100%;
 }
 
 /* hide redundant video-header so it doesn't add spacing */
@@ -3157,7 +3119,8 @@ pre {
 /* 响应式：宽 < 330px 或 高 < 530px 时，仅保留标题并提示"空间不足"
    注意：全屏播放时（body.fullscreen-active）跳过这些隐藏规则，确保视频可见 */
 @media (max-width:329.98px),
-(max-height: 529.98px) {
+/* height limit reduced to match JS threshold */
+(max-height: 479.98px) {
     /* ---- 以下隐藏/收缩规则仅在非全屏时生效 ---- */
 
     /* 隐藏预览区域中的所有直接子项（只保留标题"视频预览"） */
@@ -3759,10 +3722,17 @@ pre {
     background: rgba(0, 0, 0, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 12px;
-    padding: 20px;
+    padding: 16px 20px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
+}
+
+.mp-stat-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
 }
 
 .mp-row {
@@ -3774,15 +3744,17 @@ pre {
 
 .mp-label {
     color: var(--muted-color);
+    font-size: 13px;
     flex-shrink: 0;
 }
 
 .mp-value {
-    color: var(--text-color);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
     text-align: right;
-    font-weight: 500;
 }
-
 
 .mp-action {
     margin-top: 8px;
@@ -4022,76 +3994,6 @@ pre {
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.9);
 }
 
-/* 锚点标记（固定指针，不随播放移动） */
-.timeline-anchor {
-    position: absolute;
-    top: 0;
-    width: 2px;
-    height: 100%;
-    pointer-events: none;
-    z-index: 9;
-    transform: translateX(-50%);
-    display: none;
-}
-
-.timeline-anchor.active {
-    display: block;
-}
-
-.timeline-anchor-line {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 2px;
-    height: 100%;
-    background: rgba(255, 200, 50, 0.75);
-    box-shadow: 0 0 5px rgba(255, 200, 50, 0.4);
-    pointer-events: none;
-}
-
-.timeline-anchor-arrow {
-    position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%) rotate(180deg);
-    width: 0;
-    height: 0;
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-bottom: 8px solid rgba(255, 200, 50, 0.95);
-    filter: drop-shadow(0 0 3px rgba(255, 200, 50, 0.6));
-    pointer-events: all;
-    cursor: ew-resize;
-    z-index: 11;
-}
-
-.timeline-anchor-label {
-    position: absolute;
-    bottom: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 9px;
-    font-weight: 700;
-    font-family: monospace;
-    color: rgba(255, 200, 50, 1);
-    white-space: nowrap;
-    pointer-events: none;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-    z-index: 11;
-}
-
-.timeline-anchor.dragging .timeline-anchor-line {
-    width: 3px;
-    background: rgba(255, 200, 50, 1);
-    box-shadow: 0 0 10px rgba(255, 200, 50, 0.7);
-}
-
-.timeline-anchor.dragging .timeline-anchor-arrow {
-    border-bottom-color: rgba(255, 200, 50, 1);
-    filter: drop-shadow(0 0 6px rgba(255, 200, 50, 1));
-}
-
 /* 时间轴空状态提示 */
 .timeline-empty-hint {
     position: absolute;
@@ -4105,208 +4007,281 @@ pre {
     font-style: italic;
 }
 
-/* 时间轴整体容器（含标签+轨道） */
+/* 时间轴整体容器 */
 .timeline-container {
-    margin-bottom: 20px;
-    padding: 12px 14px 10px;
     background: rgba(0, 0, 0, 0.2);
     border-radius: 10px;
     border: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 8px 10px 6px;
+    overflow: visible;
+    container-type: inline-size;
 }
 
+/* 时间轴工具栏：默认单行 */
 .timeline-container-title {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: 10px;
-    font-size: 12px;
-    color: var(--muted-color);
-    font-weight: 600;
-}
-
-.timeline-container-title span {
-    color: var(--muted-color);
-}
-
-.timeline-meta {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-}
-
-.timeline-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px 12px;
-    min-width: 0;
-    width: 100%;
-}
-
-.timeline-toolbar-left,
-.timeline-toolbar-center,
-.timeline-toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    flex-wrap: wrap;
-}
-
-.timeline-toolbar-left>*,
-.timeline-toolbar-center>*,
-.timeline-toolbar-right>* {
-    flex-shrink: 0;
-}
-
-.timeline-toolbar-left {
-    justify-content: flex-start;
-}
-
-.timeline-toolbar-center {
-    justify-content: center;
-    flex: 1 1 auto;
-    min-width: 200px;
-    overflow: visible;
-    position: relative;
-}
-
-.timeline-toolbar-right {
-    justify-content: flex-end;
-}
-
-.timeline-in-controls .timeline-toolbar-right {
     flex-wrap: nowrap;
-    white-space: nowrap;
-}
-
-.timeline-in-controls .timeline-toolbar-right>* {
-    flex: 0 0 auto;
-}
-
-.timeline-toolbar-left>.tl-zoom-group {
-    background: transparent;
-    border: none;
-    padding: 0;
-}
-
-.timeline-toolbar-center .tl-compact-actions {
-    display: none;
-}
-
-.timeline-toolbar-center.compact-actions-on .tl-follow-btn,
-.timeline-toolbar-center.compact-actions-on .tl-thumb-btn,
-.timeline-toolbar-center.compact-actions-on .tl-waveform-btn {
-    display: none;
-}
-
-.timeline-toolbar-center.compact-actions-on .tl-compact-actions {
-    display: flex;
-}
-
-/* ======= 时间轴嵌入视频控制区 ======= */
-
-.timeline-in-controls {
-    width: 100%;
-    box-sizing: border-box;
-    margin: 6px 0 2px;
-}
-
-.timeline-in-controls .timeline-container {
-    margin-bottom: 0;
-    padding: 8px 10px 6px;
-    border-radius: 8px;
-    position: relative;
-    overflow: visible;
-}
-
-.timeline-in-controls .timeline-container-title {
+    gap: 6px;
     margin-bottom: 6px;
-    font-size: 11px;
-    gap: 8px;
-    flex-wrap: nowrap;
+    font-size: 0;
     position: relative;
     z-index: 50;
 }
 
-.timeline-in-controls .timeline-toolbar {
+/* 左侧：播放/时间 */
+.tl-bar-left {
     display: flex;
     align-items: center;
-    gap: 8px;
     flex-wrap: nowrap;
-}
-
-.timeline-in-controls .timeline-toolbar-left {
+    gap: 6px;
     flex: 0 0 auto;
-    flex-wrap: nowrap;
 }
 
-.timeline-in-controls .timeline-toolbar-center {
+/* 中间：常用功能按钮 */
+.tl-bar-center {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 4px;
     flex: 1 1 auto;
     min-width: 0;
-    justify-content: flex-start;
-    flex-wrap: nowrap;
     overflow: visible;
 }
 
-.timeline-in-controls .timeline-toolbar-right {
-    flex: 0 0 auto;
+/* QWCP 按钮组：作为整体不拆分 */
+.tl-clip-group {
+    display: flex;
+    align-items: center;
     flex-wrap: nowrap;
-    white-space: nowrap;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+/* DJ 导航按钮组：作为整体不拆分 */
+.tl-anchor-group {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+/* 右侧：菜单/全屏 */
+.tl-bar-right {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 4px;
+    flex: 0 0 auto;
     margin-left: auto;
 }
 
-.timeline-in-controls .timeline-toolbar-right>* {
+/* === 宽度不足：中间落到第二行 === */
+.timeline-container-title.tl-wrapped {
+    flex-wrap: wrap;
+}
+
+.timeline-container-title.tl-wrapped > .tl-bar-left {
+    flex: 0 0 auto;
+    order: 0;
+}
+
+.timeline-container-title.tl-wrapped > .tl-bar-right {
+    flex: 0 0 auto;
+    margin-left: auto;
+    order: 1;
+}
+
+.timeline-container-title.tl-wrapped > .tl-bar-center {
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    overflow: visible;
+    min-width: 0;
+    order: 2;
+}
+
+/* === 右侧合并到中间栏：右侧按钮插入 speed+zoom 同行末尾 === */
+.tl-bar-center.tl-right-merged > .tl-clip-group {
+    order: 2;
+}
+
+.tl-bar-center.tl-right-merged > .tl-anchor-group {
+    order: 3;
+}
+
+.tl-bar-center.tl-right-merged > .tl-bar-right {
+    order: 1;
+    margin-left: auto;
     flex: 0 0 auto;
 }
 
-.timeline-in-controls .timeline-toolbar.two-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: auto auto;
+/* ---- 通用工具栏按钮 ---- */
+.tl-btn {
+    display: inline-flex;
     align-items: center;
-    column-gap: 8px;
-    row-gap: 6px;
+    justify-content: center;
+    flex: 0 0 auto;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    line-height: 1.4;
+    user-select: none;
 }
 
-.timeline-in-controls .timeline-toolbar.two-row .timeline-toolbar-left {
-    grid-column: 1;
-    grid-row: 1;
+.tl-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.18);
 }
 
-.timeline-in-controls .timeline-toolbar.two-row .timeline-toolbar-right {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-    margin-left: 0;
+.tl-btn.active {
+    color: #fff;
+    background: var(--accent-color);
+    border-color: var(--accent-color);
 }
 
-.timeline-in-controls .timeline-toolbar.two-row .timeline-toolbar-center {
-    grid-column: 1 / span 2;
-    grid-row: 2;
-    flex-wrap: wrap;
+.tl-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* 播放时间显示 — 不允许省略 */
+.tl-bar-left .time-text {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.65);
+    font-family: monospace;
+    white-space: nowrap;
+    flex-shrink: 0;
+    max-width: none !important;
     overflow: visible;
-    white-space: normal;
+    text-overflow: clip;
 }
 
-.timeline-in-controls .timeline-toolbar.two-row .timeline-toolbar-center::-webkit-scrollbar {
+/* ---- 裁切标记按钮（工具栏内） ---- */
+.tl-clip-mark {
+    flex-direction: column;
+    gap: 1px;
+    padding: 2px 6px;
+    line-height: 1.1;
+}
+
+.tl-clip-mark .clip-ctrl-mark-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--muted-color);
+    white-space: nowrap;
+}
+
+.tl-clip-mark .clip-ctrl-mark-time {
+    font-family: monospace;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--accent-color);
+    white-space: nowrap;
+}
+
+.tl-clip-add {
+    color: rgba(79, 158, 255, 0.9);
+    border-color: rgba(79, 158, 255, 0.3);
+}
+
+.tl-clip-add:hover {
+    color: #fff;
+    background: rgba(79, 158, 255, 0.3);
+    border-color: rgba(79, 158, 255, 0.5);
+}
+
+/* ---- 下拉菜单组（缩放/倍速/更多） ---- */
+.tl-dropdown {
+    position: relative;
+    display: inline-flex;
+}
+
+.tl-dropdown-menu {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
     display: none;
+    flex-direction: column;
+    min-width: 80px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 3px;
+    border-radius: 6px;
+    background: #0e1220;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.6);
+    z-index: 200;
 }
 
-.timeline-in-controls .timeline-track {
-    height: 44px;
+.tl-dropdown.open .tl-dropdown-menu {
+    display: flex;
 }
 
-.timeline-in-controls .timeline-clip {
-    top: 0;
-    height: 100%;
+/* 右侧菜单对齐右边 */
+.tl-bar-right .tl-dropdown-menu,
+.tl-dropdown.tl-dropdown-right .tl-dropdown-menu {
+    left: auto;
+    right: 0;
 }
 
-.timeline-in-controls .timeline-selection {
-    top: 3px;
-    height: 36px;
+.tl-dropdown-item {
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: left;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
 }
+
+.tl-dropdown-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+}
+
+.tl-dropdown-item.active {
+    background: var(--accent-color);
+    color: #fff;
+}
+
+.tl-dropdown-item:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+/* ---- 更多菜单分割线 ---- */
+.tl-dropdown-sep {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 3px 6px;
+}
+
+/* ======= 时间轴嵌入视频控制区 ======= */
+.timeline-in-controls {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 6px 0 2px;
+    overflow: visible;
+}
+
+
+
+
 
 /* ---- Q / W 拖拽手柄 ---- */
 .timeline-handle {
@@ -4390,73 +4365,6 @@ pre {
     opacity: 0.95;
 }
 
-/* ---- 裁切控制行 ---- */
-.clip-ctrl-bar {
-    display: flex;
-    align-items: stretch;
-    gap: 6px;
-    margin-top: 6px;
-    flex-wrap: wrap;
-}
-
-.clip-ctrl-mark {
-    flex: 1 1 0;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    padding: 5px 6px;
-    font-size: 11px;
-    cursor: pointer;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    transition: background 0.15s, border-color 0.15s;
-    line-height: 1.2;
-}
-
-.clip-ctrl-mark:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.2);
-}
-
-.clip-ctrl-mark-label {
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--muted-color);
-    white-space: nowrap;
-}
-
-.clip-ctrl-mark-time {
-    font-family: monospace;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--accent-color);
-    white-space: nowrap;
-}
-
-.clip-ctrl-action {
-    flex: 0 0 auto;
-    padding: 5px 12px;
-    font-size: 12px;
-    font-weight: 700;
-    border-radius: 6px;
-    white-space: nowrap;
-}
-
-.clip-ctrl-add {
-    background: rgba(79, 158, 255, 0.2);
-    border-color: rgba(79, 158, 255, 0.4);
-    color: rgba(79, 158, 255, 1);
-}
-
-.clip-ctrl-add:hover {
-    background: rgba(79, 158, 255, 0.35);
-    border-color: rgba(79, 158, 255, 0.6);
-}
-
 /* ---- 时间轴片段 hover 删除按钮 ---- */
 .timeline-clip-del {
     position: absolute;
@@ -4486,98 +4394,6 @@ pre {
 .timeline-clip-del:hover {
     background: rgba(240, 30, 30, 1);
     transform: scale(1.15);
-}
-
-/* ---- 缩放挡位按钮组 ---- */
-.tl-zoom-group {
-    display: flex;
-    flex-wrap: wrap;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 6px;
-    padding: 2px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    gap: 2px;
-}
-
-.tl-zoom-group.tl-zoom-collapsed {
-    position: relative;
-    background: transparent;
-    border: none;
-    padding: 0;
-    z-index: 60;
-}
-
-.tl-zoom-toggle {
-    min-width: 66px;
-}
-
-.tl-zoom-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    display: none;
-    flex-direction: column;
-    min-width: 74px;
-    padding: 2px;
-    border-radius: 6px;
-    background: rgba(10, 14, 28, 0.96);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
-    z-index: 120;
-}
-
-.tl-zoom-group.tl-zoom-collapsed.open .tl-zoom-menu {
-    display: flex;
-}
-
-.tl-zoom-menu-item {
-    border: none;
-    background: transparent;
-    color: rgba(255, 255, 255, 0.75);
-    font-size: 11px;
-    font-weight: 600;
-    text-align: left;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.tl-zoom-menu-item:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: #fff;
-}
-
-.tl-zoom-menu-item.active {
-    background: var(--accent-color);
-    color: #fff;
-}
-
-.tl-zoom-btn {
-    background: transparent;
-    border: none;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 11px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.tl-zoom-btn:hover {
-    color: #fff;
-    background: rgba(255, 255, 255, 0.08);
-}
-
-.tl-zoom-btn.active {
-    color: #fff;
-    background: var(--accent-color);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-}
-
-.tl-zoom-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
 }
 
 /* ---- 自定义时间轴滚动条 ---- */
@@ -4619,41 +4435,6 @@ pre {
 
 /* ========== 移动端 / 窄屏响应式优化 ========== */
 
-/* ---- 裁切控制行：≤360px 进一步紧凑 ---- */
-@media (max-width: 360px) {
-    .clip-ctrl-bar {
-        gap: 3px;
-    }
-
-    .clip-ctrl-mark {
-        gap: 1px;
-    }
-}
-
-/* ---- 工具栏进一步紧凑 ---- */
-@media (max-width: 400px) {
-    .timeline-toolbar {
-        gap: 3px 6px;
-    }
-
-    .timeline-toolbar-center {
-        gap: 3px;
-    }
-
-    .timeline-in-controls .timeline-container-title {
-        margin-bottom: 4px;
-        gap: 4px;
-    }
-
-    .timeline-in-controls .timeline-track {
-        height: 32px;
-    }
-
-    .timeline-in-controls .timeline-selection {
-        height: 26px;
-    }
-}
-
 /* ---- 主控制行：≤400px 缩减时间显示 ---- */
 @media (max-width: 400px) {
     #videoControlsContainer .time-text {
@@ -4685,8 +4466,7 @@ pre {
 }
 
 /* timeDisplay 保持完整显示，不做省略截断 */
-#videoControlsContainer .buttons-row.main-ctrls #timeDisplay.time-text,
-#videoControlsContainer .timeline-toolbar-left #timeDisplay.time-text {
+#videoControlsContainer .buttons-row.main-ctrls #timeDisplay.time-text {
     max-width: none !important;
     overflow: visible;
     text-overflow: clip;

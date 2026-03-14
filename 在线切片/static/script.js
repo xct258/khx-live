@@ -1,5 +1,9 @@
-﻿let currentVideoName = '';
+let currentVideoName = '';
 let currentTreePath = ''; // 当前文件树路径（用于“进入文件夹”模式）
+
+// minimum previewable dimensions (used by updatePreviewEmptyHint)
+const PREVIEW_MIN_WIDTH = 330;
+const PREVIEW_MIN_HEIGHT = 480; // lowered from original 400 to allow shorter viewports
 
 // 默认显示的树路径（虚拟根目录）
 function getDefaultTreePath() {
@@ -124,6 +128,8 @@ const videoControlsContainer = document.getElementById('videoControlsContainer')
 const progressBar = document.getElementById('progressBar');
 let isDragging = false;
 const playPauseBtn = document.getElementById('playPauseBtn');
+const backwardBtn = document.getElementById('backwardBtn');
+const forwardBtn = document.getElementById('forwardBtn');
 
 // 判断视频控制是否就绪（已选择视频 且 已加载预览）
 function __isVideoReady() {
@@ -145,7 +151,7 @@ function __isVideoReady() {
 // 同步所有视频控制按钮/进度条的 disabled 状态
 function __syncVideoControlsDisabledState() {
     var _ready = __isVideoReady();
-    var _btns = [playPauseBtn, quickSetStartBtn, quickSetEndBtn, quickAddClipBtnCtrl, quickPlayClipBtn, fullscreenBtn];
+    var _btns = [backwardBtn, playPauseBtn, forwardBtn, quickSetStartBtn, quickSetEndBtn, quickAddClipBtnCtrl, quickPlayClipBtn, fullscreenBtn];
     for (var _i = 0; _i < _btns.length; _i++) {
         if (_btns[_i]) _btns[_i].disabled = !_ready;
     }
@@ -153,32 +159,44 @@ function __syncVideoControlsDisabledState() {
     if (speedSelectToggle) speedSelectToggle.disabled = !_ready;
     if (speedSelectGroup && !_ready) speedSelectGroup.classList.remove('open');
     if (speedSelectMenu) {
-        speedSelectMenu.querySelectorAll('.tl-zoom-menu-item[data-speed]').forEach(function (btn) {
+        speedSelectMenu.querySelectorAll('.tl-dropdown-item[data-speed]').forEach(function (btn) {
             btn.disabled = !_ready;
         });
     }
     if (progressBar) progressBar.disabled = !_ready;
+
+    // mark control container with a class so default dimming applies before JS runs
+    if (videoControlsContainer) {
+        if (_ready) {
+            videoControlsContainer.classList.add('ready');
+        } else {
+            videoControlsContainer.classList.remove('ready');
+        }
+    }
 }
 
-// 在合并/切片运行时标记“添加片段”受限，但保留按钮可点击（点击会提示不可添加）
+// 在合并/切片运行或排队时标记“添加片段”受限，但保留按钮可点击（点击会提示不可添加）
+function __isClipEditLocked(state) {
+    const s = state && typeof state === 'object' ? state : (__mergeStatusLastState || {});
+    return s.running === true || s.queued === true;
+}
+
 function __syncClipAddDisabledState(state) {
     try {
-        const s = state && typeof state === 'object' ? state : (__mergeStatusLastState || { running: false });
-        const running = s.running === true;
-        const disabled = !!running; // 仅作为内部标志使用
+        const locked = __isClipEditLocked(state);
 
         if (confirmAddClipBtn) {
             // 不再真正禁用按钮（保持可点击），仅添加样式提示
-            confirmAddClipBtn.classList.toggle('clip-add-locked', disabled);
-            confirmAddClipBtn.title = disabled ? '当前正在切片，点击将提示无法添加' : '确认添加片段';
+            confirmAddClipBtn.classList.toggle('clip-add-locked', locked);
+            confirmAddClipBtn.title = locked ? '当前正在切片/队列中，点击将提示无法添加' : '确认添加片段';
         }
         if (quickAddClipBtnCtrl) {
-            quickAddClipBtnCtrl.classList.toggle('clip-add-locked', disabled);
-            quickAddClipBtnCtrl.title = disabled ? '当前正在切片，点击将提示无法添加' : '添加片段';
+            quickAddClipBtnCtrl.classList.toggle('clip-add-locked', locked);
+            quickAddClipBtnCtrl.title = locked ? '当前正在切片/队列中，点击将提示无法添加' : '添加片段';
         }
 
         // 仅作为视觉/状态标记，供其他逻辑/样式使用
-        try { document.body.dataset.clipAddDisabled = disabled ? '1' : '0'; } catch (e) { }
+        try { document.body.dataset.clipAddDisabled = locked ? '1' : '0'; } catch (e) { }
     } catch (e) {
         // ignore
     }
@@ -254,8 +272,8 @@ function updatePreviewEmptyHint() {
 
         const w = window.innerWidth || document.documentElement.clientWidth || 0;
         const h = window.innerHeight || document.documentElement.clientHeight || 0;
-        const widthTooSmall = (w < 330);
-        const heightTooSmall = (h < 530);
+        const widthTooSmall = (w < PREVIEW_MIN_WIDTH);
+        const heightTooSmall = (h < PREVIEW_MIN_HEIGHT);
 
         let text = '空间不足，无法显示预览';
         if (widthTooSmall && heightTooSmall) {
@@ -274,10 +292,10 @@ function updatePreviewEmptyHint() {
 }
 
 const timeDisplay = document.getElementById('timeDisplay');
-const quickSetStartBtn = document.getElementById('quickSetStartBtn');
-const quickSetEndBtn = document.getElementById('quickSetEndBtn');
-const quickAddClipBtnCtrl = document.getElementById('quickAddClipBtnCtrl');
-const quickPlayClipBtn = document.getElementById('quickPlayClipBtn');
+let quickSetStartBtn = null;
+let quickSetEndBtn = null;
+let quickAddClipBtnCtrl = null;
+let quickPlayClipBtn = null;
 const speedSelect = document.getElementById('speedSelect');
 const speedSelectGroup = document.getElementById('speedSelectGroup');
 const speedSelectToggle = document.getElementById('speedSelectToggle');
@@ -287,8 +305,8 @@ const fullscreenBtn = document.getElementById('fullscreenBtn');
 const mainControlsRow = document.querySelector('#videoControlsContainer .buttons-row.main-ctrls');
 const mainLeftCtrlGroup = mainControlsRow ? mainControlsRow.querySelector('.ctrl-group.left') : null;
 const mainRightCtrlGroup = mainControlsRow ? mainControlsRow.querySelector('.ctrl-group.right') : null;
-const ctrlStartDisp = document.getElementById('ctrlStartDisp');
-const ctrlEndDisp = document.getElementById('ctrlEndDisp');
+let ctrlStartDisp = null;
+let ctrlEndDisp = null;
 const usernameInput = document.getElementById('usernameInput');
 const clipTitleInput = document.getElementById('clipTitleInput');
 const openHistoryBtn = document.getElementById('openHistoryBtn');
@@ -393,12 +411,37 @@ if (cancelMergeBtnModalFixed) {
         const ok = await showConfirmModal('确定要取消当前任务吗？', { title: '取消确认', okText: '确认取消' });
         if (!ok) return;
 
+        let canceledQueue = false;
         try {
             cancelMergeBtnModalFixed.disabled = true;
             cancelMergeBtnModalFixed.textContent = '取消中...';
 
             const s = await __fetchMergeStatus();
             __mergeStatusLastState = s;
+
+            // 若在队列中，则取消排队（不影响正在运行的任务）
+            if (s && s.queued === true) {
+                await fetch('/api/cancel_merge', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job_id: String(s.job_id || ''), merge_token: __getMergeToken() })
+                });
+                showToast('已取消排队任务');
+                __setMergeToken('');
+                __stopMergeStatusPolling();
+                updateFloatingWidget(false);
+                try { closeProgressModal(); } catch (e) { }
+                try {
+                    if (mergeAllBtn) {
+                        mergeAllBtn.disabled = false;
+                        mergeAllBtn.textContent = '开始合并';
+                    }
+                } catch (e) { }
+                __syncCancelMergeBtnFixed({ running: false });
+                canceledQueue = true;
+                return;
+            }
+
             if (!(s && s.running === true)) {
                 showToast('当前没有可取消的任务');
                 __syncCancelMergeBtnFixed(s);
@@ -415,7 +458,9 @@ if (cancelMergeBtnModalFixed) {
         } catch (e) {
             showToast('取消失败');
         } finally {
-            __startMergeStatusPolling({ forceFast: true });
+            if (!canceledQueue) {
+                __startMergeStatusPolling({ forceFast: true });
+            }
         }
     });
     // 初始状态：隐藏（无任务时不显示）
@@ -676,14 +721,18 @@ function __computeNextMergePollMs(state, { forceFast = false } = {}) {
     const running = s.running === true;
 
     // 未授权：后端会返回 running=false，这里也直接停止轮询
-    if (!running && !String(__getMergeToken() || '').trim()) return 0;
+    const queued = s.queued === true;
+    if (!running && !queued && !String(__getMergeToken() || '').trim()) return 0;
 
     // Already acked: stop polling
     const jobId = String(s.job_id || '').trim();
-    if (!running && jobId && jobId === __getAckedJobId()) return 0;
+    if (!running && !queued && jobId && jobId === __getAckedJobId()) return 0;
 
     // 页面在后台时大幅降频，避免“挂着标签页”刷接口
     if (document.hidden && !forceFast) return 15000;
+
+    // 排队中：以较低频率继续轮询
+    if (queued) return forceFast ? 1500 : 3000;
 
     if (running) {
         return forceFast ? 800 : 1200;
@@ -800,15 +849,12 @@ function __renderMergeTerminalFromMergeStatus(state) {
         if (progressModalBody) {
             progressModalBody.innerHTML = `
                 <div class="merge-result-card error">
+                    <div class="merge-result-icon">❌</div>
                     <div class="merge-result-title">合并失败</div>
                     <div class="merge-result-sub">请检查错误信息后重试</div>
-                    
                     <pre class="merge-result-error">${__escapeHtml(errorText || 'Unknown error')}</pre>
-                    
-                    <div>
-                        <button id="copyErrorBtn" type="button">
-                            复制错误信息
-                        </button>
+                    <div class="merge-result-actions">
+                        <button id="copyErrorBtn" type="button">复制错误信息</button>
                     </div>
                 </div>
             `;
@@ -844,22 +890,19 @@ function __renderMergeTerminalFromMergeStatus(state) {
             const safeOutPath = __escapeHtml(outPath || '');
             progressModalBody.innerHTML = `
                 <div class="merge-result-card">
+                    <div class="merge-result-icon">✅</div>
                     <div class="merge-result-title">合并完成</div>
-                    ${safeOutPath ? `<div>${__escapeHtml((outPath || '').split(/[\\\/]/).pop() || '')}</div>` : ''}
+                    ${safeOutPath ? `<div class="merge-result-filename">${__escapeHtml((outPath || '').split(/[\\\/]/).pop() || '')}</div>` : ''}
 
                     ${!outPath ? '' : `
-                    <div id="fileNotExistWarning" style="display:none; color:#ff8080; font-size:12px; background:rgba(255,0,0,0.1); padding:8px; border-radius:6px; width:100%;">⚠ 文件不存在或已被删除</div>
+                    <div id="fileNotExistWarning" class="merge-result-warning" style="display:none;">⚠ 文件不存在或已被删除</div>
                     `}
 
                     <div class="merge-result-actions">
-                            <button id="downloadClipBtn" type="button">
-                                下载视频
-                            </button>
-                            <button id="copyClipLinkBtn" type="button">
-                                复制链接
-                            </button>
+                        <button id="downloadClipBtn" type="button">下载视频</button>
+                        <button id="copyClipLinkBtn" type="button">复制链接</button>
                     </div>
-                    <div class="clear-choice-group" style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:6px;">
+                    <div class="clear-choice-group">
                             <label class="source-option">
                                 <input type="radio" name="clearChoice" value="clear" checked>
                                 <div class="source-content">
@@ -983,6 +1026,7 @@ function __renderMergeTerminalFromMergeStatus(state) {
 function __renderMergeStatus(state) {
     const s = state && typeof state === 'object' ? state : { running: false };
     const running = s.running === true;
+    const queued = s.queued === true;
     const status = String(s.status || '').toLowerCase();
 
     // 同步“取消当前任务”按钮状态（常驻按钮）
@@ -990,6 +1034,36 @@ function __renderMergeStatus(state) {
     // 当后端处于运行态（s.running === true）时禁止添加片段
     try { __syncClipAddDisabledState(s); } catch (e) { }
 
+    // ── 排队中：显示排队状态 ──
+    if (queued) {
+        const pos = Number(s.queue_position ?? 0);
+        const len = Number(s.queue_length ?? 0);
+        const curEta = String(s.current_task_eta_human || '').trim();
+        const queueMsg = `排队中（第 ${pos} 位，共 ${len} 个等待）`;
+        const etaLine = curEta ? `，当前任务剩余 ${curEta}` : '';
+        updateFloatingWidget(true, queueMsg, false);
+        if (mergeAllBtn) {
+            // 允许继续提交新任务加入队列
+            mergeAllBtn.disabled = false;
+            mergeAllBtn.textContent = '排队中...';
+        }
+        if (progressModalBody) {
+            progressModalBody.innerHTML = `
+                <div class="mp-card">
+                    <div class="mp-header">
+                        <div class="mp-stage">排队中</div>
+                        <div class="mp-percent">第 ${pos} 位</div>
+                    </div>
+                    <div class="mp-details">
+                        <div class="mp-stat-item" style="text-align:center;">
+                            <span class="mp-value">${queueMsg}${etaLine}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        return;
+    }
 
     // 状态文本映射
     const stageRaw = String(s.stage || s.status || '').toLowerCase();
@@ -1011,7 +1085,8 @@ function __renderMergeStatus(state) {
     if (running) {
         updateFloatingWidget(true, `${stageText} ${pctText}`, true);
         if (mergeAllBtn) {
-            mergeAllBtn.disabled = true;
+            // 保持按钮可用，允许继续提交任务加入队列
+            mergeAllBtn.disabled = false;
             mergeAllBtn.textContent = (stageRaw === 'merging') ? '正在合并中...' : (stageRaw === 'queued') ? '排队中...' : '正在处理中...';
         }
     } else {
@@ -2091,7 +2166,7 @@ function __renderOutputHistory() {
         const safeFileName = String(file).split(/[/\\]/).pop().replace(/"/g, '&quot;');
         return `
             <div class="glass" style="padding:10px; margin-top:10px;" data-output-item="${safeFile}">
-                <div style="font-weight:bold; white-space:normal; overflow-wrap:anywhere; word-break:break-word; margin-bottom:8px;">${safeFile}</div>
+                <div style="font-weight:bold; white-space:normal; overflow-wrap:anywhere; word-break:break-word; margin-bottom:8px;">${safeFileName}</div>
                 <div class="output-status" style="display:none; font-size:12px; color:#ff9999; margin-bottom:6px;">⚠ 文件不存在</div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
                     <a href="/clips/${encodeURIComponent(file)}" download="${safeFileName}" class="download-link">
@@ -2459,6 +2534,69 @@ function __saveClipToolState() {
     }
 }
 
+function __exportClips() {
+    const tasks = __sanitizeVideoTasks(videoTasks);
+    if (!tasks.length) {
+        showToast('没有片段可以导出', 'warning');
+        return;
+    }
+    const blob = new Blob([JSON.stringify(tasks, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.download = `clips_${ts}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`已导出 ${tasks.reduce((n, v) => n + v.clips.length, 0)} 个片段`, 'success');
+}
+
+function __importClips() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.style.display = 'none';
+    input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const raw = JSON.parse(text);
+            const imported = __sanitizeVideoTasks(raw);
+            if (!imported.length) {
+                showToast('导入文件中没有有效片段', 'warning');
+                return;
+            }
+            const clipCount = imported.reduce((n, v) => n + v.clips.length, 0);
+            const existingCount = __getTotalClipCountFromVideoTasks();
+            let doReplace = true;
+            if (existingCount > 0) {
+                try {
+                    doReplace = await showConfirmModal(
+                        `当前有 ${existingCount} 个片段，导入将替换全部。确认导入 ${clipCount} 个新片段？`,
+                        { title: '导入片段', okText: '替换导入', cancelText: '取消' }
+                    );
+                } catch (e) { doReplace = true; }
+            }
+            if (!doReplace) return;
+            videoTasks.length = 0;
+            videoTasks.push(...imported);
+            __mergeOrderOverride = null;
+            renderNewClipList();
+            __saveClipToolState();
+            showToast(`已导入 ${clipCount} 个片段`, 'success');
+        } catch (e) {
+            showToast('导入失败：文件格式不正确', 'error');
+        } finally {
+            document.body.removeChild(input);
+        }
+    });
+    document.body.appendChild(input);
+    input.click();
+}
+
 if (usernameInput) {
     usernameInput.addEventListener('input', () => __saveClipToolState());
 }
@@ -2493,8 +2631,8 @@ const clearAllClipsFn = document.getElementById('clearAllClipsFn');
 
 let tempStart = null;
 let tempEnd = null;
-const dynamicImageUrl = 'https://random-image.xct258.top/';
-// const dynamicImageUrl = 'http://192.168.50.4:8181/';
+// const dynamicImageUrl = 'https://random-image.xct258.top/';
+const dynamicImageUrl = 'http://192.168.50.4:8181/';
 
 // ------------------ Toast 工具 ------------------
 function ensureToastHost() {
@@ -2655,9 +2793,34 @@ function showConfirmModal(message, opts = {}) {
     const cancelText = (opts.cancelText ?? '取消').toString();
 
     titleEl.textContent = title;
-    msgEl.textContent = (message ?? '').toString();
+    // message may contain HTML for checkbox insertion later
+    if (typeof message === 'string') {
+        msgEl.textContent = message;
+    } else {
+        msgEl.textContent = '';
+    }
     okBtn.textContent = okText;
     cancelBtn.textContent = cancelText;
+
+    // 如果传入了不再提示的键，则在 actions 行前端插入复选框
+    let dontKey = opts.dontAskAgainKey ? String(opts.dontAskAgainKey) : null;
+    if (dontKey) {
+        try {
+            if (localStorage.getItem(dontKey) === '1') {
+                return Promise.resolve(true);
+            }
+        } catch (e) { }
+        const actions = document.getElementById('modalActions');
+        if (actions) {
+            // remove any existing checkbox label first
+            const existing = actions.querySelector('label[data-dontask]');
+            if (existing) existing.remove();
+            const cbLabel = document.createElement('label');
+            cbLabel.setAttribute('data-dontask', '1');
+            cbLabel.innerHTML = '<input type="checkbox" id="modalDontAskAgain" style="margin-right:4px;vertical-align:middle;"> 下次不再提示';
+            actions.insertBefore(cbLabel, actions.firstChild);
+        }
+    }
 
     // 新的 modal token：任何挂起的“恢复取消按钮”任务在 token 不匹配时应被忽略
     const myModalId = (window.__modalSeq = (window.__modalSeq || 0) + 1);
@@ -2684,10 +2847,20 @@ function showConfirmModal(message, opts = {}) {
             document.removeEventListener('keydown', onKeyDown);
         };
 
-        const onOk = () => { cleanup(); resolve(true); };
+        const onOk = () => {
+            // 如果勾选了“下次不再提示”，保存标识
+            if (dontKey) {
+                try {
+                    const cb = document.getElementById('modalDontAskAgain');
+                    if (cb && cb.checked) {
+                        localStorage.setItem(dontKey, '1');
+                    }
+                } catch (e) { }
+            }
+            cleanup(); resolve(true);
+        };
         const onCancel = () => { cleanup(); resolve(false); };
         const onOverlay = (e) => {
-            // 点击遮罩关闭（等价取消），点击弹窗本体不关闭
             if (e.target === overlay) { cleanup(); resolve(false); }
         };
         const onKeyDown = (e) => {
@@ -2700,7 +2873,6 @@ function showConfirmModal(message, opts = {}) {
         overlay.addEventListener('click', onOverlay);
         document.addEventListener('keydown', onKeyDown);
 
-        // 默认把焦点放到“确定”按钮
         setTimeout(() => okBtn.focus(), 0);
     });
 }
@@ -2932,13 +3104,15 @@ async function initPage() {
                         const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
                         // 等待 fade-in 动画与布局稳定后再滚动（避免跳动）
                         setTimeout(() => {
-                            try {
-                                const rect = videoEl.getBoundingClientRect();
-                                const inView = rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight);
-                                if (!inView) {
-                                    videoEl.scrollIntoView({ behavior: prefersReduced ? 'auto' : 'smooth', block: 'center' });
-                                }
-                            } catch (e) { }
+                            requestAnimationFrame(() => {
+                                try {
+                                    const rect = videoEl.getBoundingClientRect();
+                                    const inView = rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight);
+                                    if (!inView) {
+                                        videoEl.scrollIntoView({ behavior: prefersReduced ? 'auto' : 'smooth', block: 'center' });
+                                    }
+                                } catch (e) { }
+                            });
                         }, 600);
                     }
                 }
@@ -2950,7 +3124,7 @@ async function initPage() {
                     if (shouldShowIntro()) showIntro();
                 } catch (e) { }
             }, 1000);
-        }, 1000);
+        }, 2000);
 
         await __loadClipToolState();
         // 根据当前（或最近一次）合并状态同步“添加片段”控件的启用/禁用
@@ -3356,6 +3530,11 @@ function renderNewClipList() {
     let __mainListDragFromIndex = null;
 
     const reorderByGlobalIndex = (fromIdx, toIdx) => {
+        if (__isClipEditLocked()) {
+            showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
+            return;
+        }
+
         const from = Number(fromIdx);
         const to = Number(toIdx);
         if (!Number.isFinite(from) || !Number.isFinite(to)) return;
@@ -3402,6 +3581,12 @@ function renderNewClipList() {
 
             // 拖拽排序（全局顺序）
             item.addEventListener('dragstart', (e) => {
+                if (__isClipEditLocked()) {
+                    showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
+                    e.preventDefault();
+                    return;
+                }
+
                 __mainListDragFromIndex = globalIdx;
                 try {
                     e.dataTransfer.effectAllowed = 'move';
@@ -3414,6 +3599,11 @@ function renderNewClipList() {
             });
             item.addEventListener('drop', (e) => {
                 e.preventDefault();
+                if (__isClipEditLocked()) {
+                    showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
+                    return;
+                }
+
                 const from = __mainListDragFromIndex;
                 __mainListDragFromIndex = null;
                 if (from === null || from === undefined) return;
@@ -3439,10 +3629,10 @@ function renderNewClipList() {
             delBtn.title = '删除此片段';
             delBtn.style.background = 'rgba(255, 100, 100, 0.2)';
             delBtn.addEventListener('click', async () => {
-                // 运行态保护：正在切片时禁止删除片段并以弹窗提示
-                try {
-                    if (__mergeStatusLastState && __mergeStatusLastState.running === true) {
-                        showAlertModal('当前正在切片，无法删除片段');
+// 运行态/排队态保护：正在切片或已在队列中时禁止删除片段并以弹窗提示
+            try {
+                if (__isClipEditLocked()) {
+                    showAlertModal('当前正在切片或已有合并任务排队，无法删除片段');
                         return;
                     }
                 } catch (e) { /* ignore and proceed */ }
@@ -4006,6 +4196,10 @@ function updateClipInputs() {
     // 同步更新控制栏常驻显示
     if (ctrlStartDisp) ctrlStartDisp.textContent = tempStart !== null ? formatTime(tempStart) : '--:--:--';
     if (ctrlEndDisp) ctrlEndDisp.textContent = tempEnd !== null ? formatTime(tempEnd) : '--:--:--';
+
+    // 刷新时间轴手柄和选区
+    if (typeof window.__tlUpdateHandles === 'function') window.__tlUpdateHandles();
+    if (typeof window.__tlUpdateSelection === 'function') window.__tlUpdateSelection();
 }
 
 // 允许手动输入时间
@@ -4068,6 +4262,11 @@ if (setStartBtn) {
         tempStart = roundToMs(player.currentTime);
         updateClipInputs();
         showToast(`起点已设定: ${formatTime(tempStart)}`);
+
+        // 如果终点已设，自动尝试添加片段
+        if (tempEnd !== null) {
+            __doAddClip();
+        }
     });
 }
 
@@ -4107,54 +4306,12 @@ if (setEndBtn) {
     });
 }
 
-// 绑定视频控制区的快捷起点/终点按钮（直接执行，不再依赖片段工坊按钮）
-if (quickSetStartBtn) {
-    quickSetStartBtn.addEventListener('click', () => {
-        if (!currentVideoName) { showAlertModal('请先选择视频'); return; }
-        if (!__isVideoReady()) { showToast('请先点击预览以加载视频，再设定起点'); return; }
-        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
-        tempStart = roundToMs(anchorT !== null ? anchorT : player.currentTime);
-        updateClipInputs();
-        showToast(`起点已设定: ${formatTime(tempStart)}`);
-    });
-}
-if (quickSetEndBtn) {
-    quickSetEndBtn.addEventListener('click', () => {
-        if (!currentVideoName) { showAlertModal('请先选择视频'); return; }
-        if (!__isVideoReady()) { showToast('请先点击预览以加载视频，再设定终点'); return; }
-        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
-        tempEnd = roundToMs(anchorT !== null ? anchorT : player.currentTime);
-        updateClipInputs();
-        // 若起点已设定 → 自动提交片段（方案A）
-        if (tempStart !== null) {
-            __doAddClip();
-        } else {
-            showToast(`终点已设定: ${formatTime(tempEnd)}，请设定起点`);
-        }
-    });
-}
-quickAddClipBtnCtrl.addEventListener('click', () => confirmAddClipBtn.click());
-
-quickPlayClipBtn.addEventListener('click', () => {
-    triggerBtnFeedback(quickPlayClipBtn);
-    if (!currentVideoName) {
-        showAlertModal('请先选择视频');
-        return;
-    }
-    if (!__isVideoReady()) {
-        showToast('请先点击预览以加载视频');
-        return;
-    }
-    const played = (typeof window.__tlTryPlaySelectedClips === 'function')
-        ? window.__tlTryPlaySelectedClips()
-        : false;
-    if (!played) showToast('请先在时间轴选中至少一个片段');
-});
+// clip-ctrl 按钮现在在 renderTimeline 中动态创建并绑定事件
 
 // ---- 添加片段核心逻辑（W键和Add按钮共用）----
 function __doAddClip({ silent = false } = {}) {
-    if (__mergeStatusLastState && __mergeStatusLastState.running === true) {
-        showAlertModal('当前正在切片，无法添加片段');
+    if (__isClipEditLocked()) {
+        showAlertModal('当前正在切片或已有合并任务排队，无法添加片段');
         return false;
     }
     if (!currentVideoName) {
@@ -4208,10 +4365,10 @@ confirmAddClipBtn.addEventListener('click', () => __doAddClip());
 
 
 clearAllClipsFn.addEventListener('click', async () => {
-    // 运行态保护：正在切片时禁止清空并提示用户
+    // 运行态/排队态保护：正在切片或已有合并任务排队时禁止清空并提示用户
     try {
-        if (__mergeStatusLastState && __mergeStatusLastState.running === true) {
-            showAlertModal('当前正在切片，无法清空片段');
+        if (__isClipEditLocked()) {
+            showAlertModal('当前正在切片或已有合并任务排队，无法清空片段');
             return;
         }
     } catch (e) { /* ignore */ }
@@ -4275,6 +4432,16 @@ setTimeout(updateFilenamePreview, 500);
 
 // ------------------ 提交任务 ------------------
 document.getElementById('mergeAllBtn').addEventListener('click', async () => {
+    // 如果已有运行中的合并，避免重复提交（排队由后端处理）
+    if (__mergeStatusLastState && __mergeStatusLastState.running === true) {
+        showToast('已有合并任务正在进行，请等待完成');
+        return;
+    }
+    if (__mergeStatusLastState && __mergeStatusLastState.queued === true) {
+        showToast('已在队列中，请稍候');
+        return;
+    }
+
     const totalClipsNow = __getTotalClipCountFromVideoTasks();
 
     let videosToSend = null;
@@ -4295,9 +4462,8 @@ document.getElementById('mergeAllBtn').addEventListener('click', async () => {
         return;
     }
 
-    // 总时长限制：按切割模式限制（fast: 120 分钟，precise: 30 分钟）
-    const cutMode = document.querySelector('input[name="cutMode"]:checked')?.value || 'fast';
-    const MAX_TOTAL_SECONDS = (cutMode === 'precise') ? 30 * 60 : 120 * 60;
+    // 总时长限制：30 分钟
+    const MAX_TOTAL_SECONDS = 30 * 60;
 
     let totalSeconds = 0;
     for (const v of videosToSend) {
@@ -4311,10 +4477,8 @@ document.getElementById('mergeAllBtn').addEventListener('click', async () => {
     }
     if (totalSeconds > MAX_TOTAL_SECONDS) {
         const maxMinutes = MAX_TOTAL_SECONDS / 60;
-        const FAST_LIMIT_MIN = 120;
-        const PRECISE_LIMIT_MIN = 30;
         showAlertModal(
-            `总时长不能超过 ${maxMinutes} 分钟（当前 ${formatTime(totalSeconds)}）。\n说明：快速切割 最大 ${FAST_LIMIT_MIN} 分钟；精准切割 最大 ${PRECISE_LIMIT_MIN} 分钟。\n请删除或缩短片段后重试。`,
+            `总时长不能超过 ${maxMinutes} 分钟（当前 ${formatTime(totalSeconds)}）。请删除或缩短片段后重试。`,
             { title: '时长超限' }
         );
         return;
@@ -4339,7 +4503,6 @@ document.getElementById('mergeAllBtn').addEventListener('click', async () => {
 
     const clipTitle = (document.getElementById('clipTitleInput')?.value || '').trim();
     const sourceMode = document.querySelector('input[name="sourceMode"]:checked')?.value || 'encode';
-    // cutMode 已于前面读取用于时长校验
 
     updateFloatingWidget(true, '提交任务...', true);
     mergeAllBtn.disabled = true;
@@ -4349,7 +4512,7 @@ document.getElementById('mergeAllBtn').addEventListener('click', async () => {
     const res = await fetch('/api/slice_merge_all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videos: videosToSend, username: username, out_basename: clipTitle || null, source_mode: sourceMode, cut_mode: cutMode })
+        body: JSON.stringify({ videos: videosToSend, username: username, out_basename: clipTitle || null, source_mode: sourceMode })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -4364,6 +4527,14 @@ document.getElementById('mergeAllBtn').addEventListener('click', async () => {
     // 保存本次任务 token（只有持有者才能看到进度/取消任务）
     __setMergeToken(data.merge_token || '');
     __setAckedJobId(''); // clear old ack
+
+    // 立即恢复按钮状态，允许继续提交下一个任务（队列模式）
+    try {
+        if (mergeAllBtn) {
+            mergeAllBtn.disabled = false;
+            mergeAllBtn.textContent = '开始合并';
+        }
+    } catch (e) { }
 
     // 新任务开始：允许历史自动回填（仅用于补写“刚完成但未及时写入历史”的记录）
     __setOutputHistoryAutofillSuppressed(false);
@@ -4403,21 +4574,22 @@ async function pollJob(jobId) {
         if (progressModalBody) {
             progressModalBody.innerHTML = `
                 <div class="merge-result-card">
+                    <div class="merge-result-icon">✅</div>
                     <div class="merge-result-title">合并完成</div>
 
-                    ${safeOutPath ? `<div>${__escapeHtml((outPath || '').split(/[\\\/]/).pop() || '')}</div>` : ''}
+                    ${safeOutPath ? `<div class="merge-result-filename">${__escapeHtml((outPath || '').split(/[\\\/]/).pop() || '')}</div>` : ''}
                     
-                    ${!fileExists && outPath ? '<div id="fileNotExistWarning" style="color:#ff8080; font-size:12px; background:rgba(255,0,0,0.1); padding:8px; border-radius:6px; width:100%;">⚠ 文件不存在或已被删除</div>' : '<div id="fileNotExistWarning" style="display:none; color:#ff8080; font-size:12px; background:rgba(255,0,0,0.1); padding:8px; border-radius:6px; width:100%;">⚠ 文件不存在或已被删除</div>'}
+                    ${!fileExists && outPath ? '<div id="fileNotExistWarning" class="merge-result-warning">⚠ 文件不存在或已被删除</div>' : '<div id="fileNotExistWarning" class="merge-result-warning" style="display:none;">⚠ 文件不存在或已被删除</div>'}
 
                     <div class="merge-result-actions">
-                            <button id="downloadClipBtn" type="button" ${!fileExists ? 'disabled' : ''}>
-                                下载视频${!fileExists ? ' (失效)' : ''}
-                            </button>
-                            <button id="copyClipLinkBtn" type="button" ${!fileExists ? 'disabled' : ''}>
-                                复制链接${!fileExists ? ' (失效)' : ''}
-                            </button>
+                        <button id="downloadClipBtn" type="button" ${!fileExists ? 'disabled' : ''}>
+                            下载视频${!fileExists ? ' (失效)' : ''}
+                        </button>
+                        <button id="copyClipLinkBtn" type="button" ${!fileExists ? 'disabled' : ''}>
+                            复制链接${!fileExists ? ' (失效)' : ''}
+                        </button>
                     </div>
-                    <div class="clear-choice-group" style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:6px;">
+                    <div class="clear-choice-group">
                             <label class="source-option">
                                 <input type="radio" name="clearChoice" value="clear" checked>
                                 <div class="source-content">
@@ -4549,14 +4721,13 @@ async function pollJob(jobId) {
 
         if (progressModalBody) {
             progressModalBody.innerHTML = `
-                <div class="merge-result-card">
-                    <div class="merge-result-header">
-                        <div class="merge-result-title" style="color:#ff9999;">合并失败</div>
-                        <div class="merge-result-sub">请检查错误信息后重试</div>
-                    </div>
+                <div class="merge-result-card error">
+                    <div class="merge-result-icon">❌</div>
+                    <div class="merge-result-title">合并失败</div>
+                    <div class="merge-result-sub">请检查错误信息后重试</div>
                     <pre class="merge-result-error">${__escapeHtml(errorText)}</pre>
-                    <div>
-                        <button id="copyErrorBtn" type="button" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:var(--text-color);">复制错误信息</button>
+                    <div class="merge-result-actions">
+                        <button id="copyErrorBtn" type="button">复制错误信息</button>
                     </div>
                 </div>
             `;
@@ -4712,11 +4883,20 @@ previewBtn.addEventListener('click', async () => {
         return;
     }
 
-    const ok = await showConfirmModal(
-        '预览视频会消耗大量流量，访问用户较多时可能出现卡顿。\n注意：预览画质可能与最终合并画质不同，仅供效果参考。\n您可以在不预览的情况下直接添加片段。\n\n确定要加载预览吗？',
-        { title: '流量提示', okText: '加载预览', cancelText: '取消' }
-    );
-    if (!ok) return;
+    // 如果用户之前选择了不再提示则直接继续
+    try {
+        if (localStorage.getItem('preview_warning') === '1') {
+            // skip dialog
+        } else {
+            const ok = await showConfirmModal(
+                '预览视频会消耗大量流量，访问用户较多时可能出现卡顿。\n注意：预览画质可能与最终合并画质不同，仅供效果参考。\n您可以在不预览的情况下直接添加片段。\n\n确定要加载预览吗？',
+                { title: '流量提示', okText: '加载预览', cancelText: '取消', dontAskAgainKey: 'preview_warning' }
+            );
+            if (!ok) return;
+        }
+    } catch (e) {
+        // 如果 localStorage 访问失败就忽略
+    }
 
     player.src = `/api/video/${encodeURIComponent(currentVideoName)}`;
     __restoreProgressForVideo = currentVideoName;
@@ -4758,7 +4938,7 @@ function __syncSpeedSelectVisualState() {
     const val = String(speedSelect.value || '1.0');
     if (speedSelectToggle) speedSelectToggle.textContent = `${val}x ▾`;
     if (speedSelectMenu) {
-        speedSelectMenu.querySelectorAll('.tl-zoom-menu-item[data-speed]').forEach(function (btn) {
+        speedSelectMenu.querySelectorAll('.tl-dropdown-item[data-speed]').forEach(function (btn) {
             btn.classList.toggle('active', String(btn.dataset.speed || '') === val);
         });
     }
@@ -4771,7 +4951,7 @@ function __refreshPreviewInteractiveState() {
         const hasTimeline = !!document.getElementById('tlWrap');
         const dur = Number(player && player.duration);
         const canTimelineInteractNow = !!(currentVideoName && Number.isFinite(dur) && dur > 0 && __isVideoReady());
-        const zoomToggleEl = document.querySelector('#timelineArea .tl-zoom-toggle');
+        const zoomToggleEl = document.querySelector('#timelineArea .tl-dropdown .tl-btn');
         const timelineStateStale = !!(zoomToggleEl && zoomToggleEl.disabled === canTimelineInteractNow);
 
         if ((!hasTimeline || timelineStateStale) && typeof window.__tlRenderTimeline === 'function') {
@@ -4804,12 +4984,14 @@ if (speedSelectToggle && speedSelectGroup) {
     speedSelectToggle.addEventListener('click', (e) => {
         e.stopPropagation();
         if (speedSelectToggle.disabled) return;
+        // 关闭同级下拉菜单
+        document.querySelectorAll('.tl-dropdown.open').forEach(dd => { if (dd !== speedSelectGroup) dd.classList.remove('open'); });
         speedSelectGroup.classList.toggle('open');
     });
 }
 
 if (speedSelectMenu && speedSelectGroup && speedSelect) {
-    speedSelectMenu.querySelectorAll('.tl-zoom-menu-item[data-speed]').forEach((btn) => {
+    speedSelectMenu.querySelectorAll('.tl-dropdown-item[data-speed]').forEach((btn) => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (btn.disabled) return;
@@ -4859,6 +5041,22 @@ function togglePlay() {
 }
 
 playPauseBtn.addEventListener('click', togglePlay);
+
+if (backwardBtn) {
+    backwardBtn.addEventListener('click', () => {
+        if (!__isVideoReady() || !player.duration) return;
+        player.currentTime = Math.max(0, player.currentTime - 5);
+        if (typeof triggerBtnFeedback === 'function') triggerBtnFeedback(backwardBtn);
+    });
+}
+
+if (forwardBtn) {
+    forwardBtn.addEventListener('click', () => {
+        if (!__isVideoReady() || !player.duration) return;
+        player.currentTime = Math.min(player.duration, player.currentTime + 5);
+        if (typeof triggerBtnFeedback === 'function') triggerBtnFeedback(forwardBtn);
+    });
+}
 
 // ------------------ 移动端全屏时自动锁定横屏 ------------------
 function tryLockLandscape() {
@@ -5485,34 +5683,46 @@ document.addEventListener('keydown', (e) => {
 
     const key = e.key.toLowerCase();
 
-    // [Q] 设定起点（从锚点位置读取，无锚点则从播放头）
+    // [Q] 设定起点（从当前播放头位置取值）
     if (key === 'q') {
-        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
-        tempStart = roundToMs(anchorT !== null ? anchorT : player.currentTime);
+        const attempted = roundToMs(player.currentTime);
+
+        // 若已设终点且起点晚于终点，则提示并不更新
+        if (tempEnd !== null && attempted > tempEnd) {
+            showToast('起点不能晚于终点，请先调整终点或重置起点', 'warning');
+            return;
+        }
+
+        tempStart = attempted;
         updateClipInputs();
-        showToast(`起点已设定: ${formatTime(tempStart)}`);
         if (quickSetStartBtn) triggerBtnFeedback(quickSetStartBtn);
+        // 如果已经有终点，则自动添加片段
+        if (tempEnd !== null) {
+            __doAddClip();
+        }
     }
-    // [W] 设定终点（从锚点位置读取），若起点已设定则自动添加片段
+    // [W] 设定终点，若起点已设定则自动添加片段
     else if (key === 'w') {
-        const anchorT = (typeof window.__tlGetAnchorTime === 'function') ? window.__tlGetAnchorTime() : null;
-        tempEnd = roundToMs(anchorT !== null ? anchorT : player.currentTime);
+        const attempted = roundToMs(player.currentTime);
+
+        // 若已设起点且终点早于起点，则提示并不更新
+        if (tempStart !== null && attempted < tempStart) {
+            showToast('终点不能早于起点，请先调整起点或重置终点', 'warning');
+            return;
+        }
+
+        tempEnd = attempted;
         updateClipInputs();
         if (quickSetEndBtn) triggerBtnFeedback(quickSetEndBtn);
         if (tempStart !== null) {
             // 起点已设，自动提交
             __doAddClip();
-        } else {
-            showToast(`终点已设定: ${formatTime(tempEnd)}，请按 Q 设定起点`);
         }
     }
     // [C] 手动添加片段（作为备选快捷键）
     else if (key === 'c' || key === 'enter') {
         e.preventDefault();
-        if (__mergeStatusLastState && __mergeStatusLastState.running === true) {
-            showAlertModal('当前正在切片，无法添加片段');
-            return;
-        }
+        if (__mergeStatusLastState && __mergeStatusLastState.running === true) return;
         __doAddClip();
         triggerBtnFeedback(confirmAddClipBtn);
         triggerBtnFeedback(quickAddClipBtnCtrl);
@@ -5525,41 +5735,53 @@ document.addEventListener('keydown', (e) => {
     // [ [ ] 回到片段起点（不播放）
     else if (key === '[') {
         e.preventDefault();
-        if (!currentVideoName) {
-            try { showAlertModal('请先选择视频'); } catch (err) { }
-            return;
-        }
-        if (tempStart === null) {
-            try { showToast('未设定片段起点'); } catch (err) { }
-            return;
-        }
+        if (!currentVideoName || tempStart === null) return;
         try {
             player.pause();
             player.currentTime = Number(tempStart);
-            try { showToast('已回到片段起点 — ' + formatTime(tempStart)); } catch (err) { }
         } catch (err) {
             // ignore
         }
     }
-    // [D] 跳转播放头到锚点
+    // [D / Shift+D] 跳转到起点（选中片段则用片段起点），无Shift时播放
     else if (key === 'd') {
         e.preventDefault();
-        if (typeof window.__tlJumpToAnchor === 'function') window.__tlJumpToAnchor();
+        const sel = (typeof window.__tlGetSelectedClipsSorted === 'function') ? window.__tlGetSelectedClipsSorted() : [];
+        const t = sel.length > 0 ? sel[0].start : (tempStart !== null ? Number(tempStart) : null);
+        if (t !== null && currentVideoName && __isVideoReady()) {
+            try {
+                if (e.shiftKey) player.pause();
+                player.currentTime = t;
+                if (!e.shiftKey) player.play();
+            } catch (err) { }
+        } else {
+            showToast('请先设置起点', 'info');
+        }
     }
-    // [J] 锚点定位到当前播放头
+    // [J / Shift+J] 跳转到终点（选中片段则用片段终点），无Shift时播放
     else if (key === 'j') {
         e.preventDefault();
-        if (typeof window.__tlPlaceAnchorAtPlayhead === 'function') window.__tlPlaceAnchorAtPlayhead();
+        const sel = (typeof window.__tlGetSelectedClipsSorted === 'function') ? window.__tlGetSelectedClipsSorted() : [];
+        const t = sel.length > 0 ? sel[sel.length - 1].end : (tempEnd !== null ? Number(tempEnd) : null);
+        if (t !== null && currentVideoName && __isVideoReady()) {
+            try {
+                if (e.shiftKey) player.pause();
+                player.currentTime = t;
+                if (!e.shiftKey) player.play();
+            } catch (err) { }
+        } else {
+            showToast('请先设置终点', 'info');
+        }
     }
-    // [ArrowLeft] 锚点后退1秒
+    // [ArrowLeft] 播放头后退1秒
     else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        if (typeof window.__tlMoveAnchor === 'function') window.__tlMoveAnchor(-1);
+        try { player.currentTime = Math.max(0, player.currentTime - 1); } catch (err) { }
     }
-    // [ArrowRight] 锚点前进1秒
+    // [ArrowRight] 播放头前进1秒
     else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        if (typeof window.__tlMoveAnchor === 'function') window.__tlMoveAnchor(1);
+        try { player.currentTime = Math.min(player.duration || 0, player.currentTime + 1); } catch (err) { }
     }
     // [Space] 播放/暂停
     else if (key === ' ') {
@@ -5618,8 +5840,6 @@ document.addEventListener('keydown', (e) => {
     let __tlSbStartX = 0;
     let __tlSbStartSL = 0;
     let __tlSbHintAt = 0;
-    let __tlToolbarResizeObserver = null;
-    let __tlCompactLayoutRaf = 0;
 
     // ---- 波形可视化状态 ----
     let __tlWaveformEnabled = true;
@@ -5632,9 +5852,6 @@ document.addEventListener('keydown', (e) => {
 
     // ---- 播放头拖拽状态 ----
     let __tlPlayheadDragging = false;
-
-    // ---- 锚点标记状态（固定指针，不随播放移动）----
-    let __tlAnchorTime = null;   // 锚点所在时间（秒），null=未放置
 
     function _tlMaybeShowFollowSbHint() {
         if (!__tlFollowPlayhead) return;
@@ -6106,7 +6323,11 @@ document.addEventListener('keydown', (e) => {
             return true;
         }
         const clips = _tlGetSelectedClipsSorted();
-        if (clips.length === 0) return false;
+        if (clips.length === 0) {
+            // no clip selected – inform the user so they know what to do
+            try { showToast('请先选择片段', 'info'); } catch (e) { }
+            return false;
+        }
         __tlSelectedPlayback = { clips, index: 0 };
         try {
             player.currentTime = clips[0].start;
@@ -6277,17 +6498,19 @@ document.addEventListener('keydown', (e) => {
         if (__tlZoomToggleBtn) {
             __tlZoomToggleBtn.textContent = (Number(__tlZoom) === 1 ? '全图' : `${__tlZoom}×`) + ' ▾';
         }
-        document.querySelectorAll('.tl-zoom-menu-item[data-zoom]').forEach(b => {
+        document.querySelectorAll('.tl-dropdown-item[data-zoom]').forEach(b => {
             b.classList.toggle('active', Number(b.dataset.zoom) === __tlZoom);
         });
 
-        _tlUpdateHandles();
-        _tlUpdateSelection();
-        _tlUpdatePlayhead();
-        _tlRerenderThumbStripByZoom();
-        _tlRerenderWaveformByZoom();
-        _tlUpdateAnchor();
-        _tlSbUpdate();
+        // 延迟至下一帧再更新，确保 inner.offsetWidth 等布局值已生效（避免缩放时选区/手柄位置错位）
+        requestAnimationFrame(() => {
+            _tlUpdateHandles();
+            _tlUpdateSelection();
+            _tlUpdatePlayhead();
+            _tlRerenderThumbStripByZoom();
+            _tlRerenderWaveformByZoom();
+            _tlSbUpdate();
+        });
     }
 
     // ==================== 主渲染 ====================
@@ -6304,6 +6527,7 @@ document.addEventListener('keydown', (e) => {
         area.style.display = '';
 
         const flatAll = __flattenVideoTasksToClips();
+        const prevScrollLeft = _tlWrap()?.scrollLeft || 0;
         area.innerHTML = '';
 
         // 容器
@@ -6318,19 +6542,19 @@ document.addEventListener('keydown', (e) => {
         }
 
         const zoomGroup = document.createElement('span');
-        zoomGroup.className = 'tl-zoom-group tl-zoom-collapsed';
+        zoomGroup.className = 'tl-dropdown';
         const zoomToggle = document.createElement('button');
-        zoomToggle.className = 'tl-zoom-btn tl-zoom-toggle';
+        zoomToggle.className = 'tl-btn';
         zoomToggle.type = 'button';
         zoomToggle.textContent = (__tlZoom === 1 ? '全图' : `${__tlZoom}×`) + ' ▾';
         zoomToggle.title = '选择时间轴缩放倍率';
         zoomToggle.disabled = !canTimelineInteract;
         __tlZoomToggleBtn = zoomToggle;
         const zoomMenu = document.createElement('div');
-        zoomMenu.className = 'tl-zoom-menu';
+        zoomMenu.className = 'tl-dropdown-menu';
         TL_ZOOM_LEVELS.forEach(z => {
             const btn = document.createElement('button');
-            btn.className = 'tl-zoom-menu-item' + (z === __tlZoom ? ' active' : '');
+            btn.className = 'tl-dropdown-item' + (z === __tlZoom ? ' active' : '');
             btn.dataset.zoom = z;
             btn.textContent = z === 1 ? '全图' : `${z}×`;
             btn.type = 'button';
@@ -6346,51 +6570,53 @@ document.addEventListener('keydown', (e) => {
         zoomToggle.addEventListener('click', (e) => {
             e.stopPropagation();
             if (!canTimelineInteract) return;
+            // 关闭同级下拉菜单
+            document.querySelectorAll('.tl-dropdown.open').forEach(dd => { if (dd !== zoomGroup) dd.classList.remove('open'); });
             zoomGroup.classList.toggle('open');
         });
         zoomGroup.appendChild(zoomToggle);
         zoomGroup.appendChild(zoomMenu);
         const followBtn = document.createElement('button');
-        followBtn.className = 'tl-zoom-btn tl-follow-btn' + (__tlFollowPlayhead ? ' active' : '');
+        followBtn.className = 'tl-btn tl-follow-btn' + (__tlFollowPlayhead ? ' active' : '');
         followBtn.type = 'button';
         followBtn.textContent = '跟随播放';
         followBtn.title = '自动跟随播放指针滚动';
         followBtn.disabled = !canTimelineInteract;
         const thumbBtn = document.createElement('button');
-        thumbBtn.className = 'tl-zoom-btn tl-thumb-btn' + (__tlThumbEnabled ? ' active' : '');
+        thumbBtn.className = 'tl-btn tl-thumb-btn' + (__tlThumbEnabled ? ' active' : '');
         thumbBtn.type = 'button';
         thumbBtn.textContent = '缩略图';
         thumbBtn.title = '显示/隐藏时间轴缩略图';
         thumbBtn.disabled = !canTimelineInteract;
         const waveformBtn = document.createElement('button');
-        waveformBtn.className = 'tl-zoom-btn tl-waveform-btn' + (__tlWaveformEnabled ? ' active' : '');
+        waveformBtn.className = 'tl-btn tl-waveform-btn' + (__tlWaveformEnabled ? ' active' : '');
         waveformBtn.type = 'button';
         waveformBtn.textContent = '波形';
         waveformBtn.title = '显示/隐藏音频波形';
         waveformBtn.disabled = !canTimelineInteract;
 
         const compactActionsGroup = document.createElement('span');
-        compactActionsGroup.className = 'tl-zoom-group tl-zoom-collapsed tl-compact-actions';
+        compactActionsGroup.className = 'tl-dropdown tl-compact-actions';
         const compactActionsToggle = document.createElement('button');
-        compactActionsToggle.className = 'tl-zoom-btn tl-zoom-toggle';
+        compactActionsToggle.className = 'tl-btn';
         compactActionsToggle.type = 'button';
         compactActionsToggle.textContent = '更多 ▾';
         compactActionsToggle.title = '更多时间轴操作';
         compactActionsToggle.disabled = !canTimelineInteract;
         const compactActionsMenu = document.createElement('div');
-        compactActionsMenu.className = 'tl-zoom-menu';
+        compactActionsMenu.className = 'tl-dropdown-menu';
         const compactFollowItem = document.createElement('button');
-        compactFollowItem.className = 'tl-zoom-menu-item';
+        compactFollowItem.className = 'tl-dropdown-item';
         compactFollowItem.type = 'button';
         compactFollowItem.textContent = '跟随播放';
         compactFollowItem.disabled = !canTimelineInteract;
         const compactThumbItem = document.createElement('button');
-        compactThumbItem.className = 'tl-zoom-menu-item';
+        compactThumbItem.className = 'tl-dropdown-item';
         compactThumbItem.type = 'button';
         compactThumbItem.textContent = '缩略图';
         compactThumbItem.disabled = !canTimelineInteract;
         const compactWaveformItem = document.createElement('button');
-        compactWaveformItem.className = 'tl-zoom-menu-item';
+        compactWaveformItem.className = 'tl-dropdown-item';
         compactWaveformItem.type = 'button';
         compactWaveformItem.textContent = '波形';
         compactWaveformItem.disabled = !canTimelineInteract;
@@ -6448,7 +6674,7 @@ document.addEventListener('keydown', (e) => {
         });
 
         const jumpGroup = document.createElement('span');
-        jumpGroup.className = 'tl-zoom-group';
+        jumpGroup.className = '';
         const jumpButtons = [
             { text: '-5s', title: '后退5秒', click: __seekBack5 },
             { text: '-1s', title: '后退1秒', click: __seekBack1 },
@@ -6457,7 +6683,7 @@ document.addEventListener('keydown', (e) => {
         ];
         jumpButtons.forEach(item => {
             const btn = document.createElement('button');
-            btn.className = 'tl-zoom-btn';
+            btn.className = 'tl-btn';
             btn.type = 'button';
             btn.textContent = item.text;
             btn.title = item.title;
@@ -6466,111 +6692,318 @@ document.addEventListener('keydown', (e) => {
             jumpGroup.appendChild(btn);
         });
         const delSelectedBtn = document.createElement('button');
-        delSelectedBtn.className = 'tl-zoom-btn';
+        delSelectedBtn.className = 'tl-btn';
         delSelectedBtn.type = 'button';
         delSelectedBtn.textContent = '删除所选';
         delSelectedBtn.title = '删除已选中的时间轴片段';
         delSelectedBtn.addEventListener('click', () => { _tlDeleteSelectedClips(); });
         __tlDeleteSelectedBtn = delSelectedBtn;
 
-        const timelineToolbar = document.createElement('span');
-        timelineToolbar.className = 'timeline-toolbar';
+        // ========== 工具栏布局 ==========
+        const barLeft = document.createElement('span');
+        barLeft.className = 'tl-bar-left';
+        if (backwardBtn) { backwardBtn.classList.add('tl-btn'); barLeft.appendChild(backwardBtn); }
+        if (playPauseBtn) { playPauseBtn.classList.add('tl-btn'); barLeft.appendChild(playPauseBtn); }
+        if (forwardBtn) { forwardBtn.classList.add('tl-btn'); barLeft.appendChild(forwardBtn); }
+        if (timeDisplay) barLeft.appendChild(timeDisplay);
 
-        const leftGroup = document.createElement('span');
-        leftGroup.className = 'timeline-toolbar-left';
-        if (playPauseBtn) leftGroup.appendChild(playPauseBtn);
-        if (timeDisplay) leftGroup.appendChild(timeDisplay);
-        if (speedSelectGroup) jumpGroup.appendChild(speedSelectGroup);
+        const barCenter = document.createElement('span');
+        barCenter.className = 'tl-bar-center';
+        // 倍速
+        if (speedSelectGroup) {
+            barCenter.appendChild(speedSelectGroup);
+        }
+        // 缩放
+        barCenter.appendChild(zoomGroup);
 
-        const centerGroup = document.createElement('span');
-        centerGroup.className = 'timeline-toolbar-center';
-        centerGroup.appendChild(jumpGroup);
-        centerGroup.appendChild(zoomGroup);
-        centerGroup.appendChild(followBtn);
-        centerGroup.appendChild(thumbBtn);
-        centerGroup.appendChild(waveformBtn);
-        centerGroup.appendChild(compactActionsGroup);
-        centerGroup.appendChild(delSelectedBtn);
+        // ---- 裁切控制按钮（动态创建，包在 clip-group 子容器里） ----
+        const clipGroup = document.createElement('span');
+        clipGroup.className = 'tl-clip-group';
 
-        const rightGroup = document.createElement('span');
-        rightGroup.className = 'timeline-toolbar-right';
-        if (openFileTreeBtnMain) rightGroup.appendChild(openFileTreeBtnMain);
-        if (fullscreenBtn) rightGroup.appendChild(fullscreenBtn);
+        quickSetStartBtn = document.createElement('button');
+        quickSetStartBtn.className = 'tl-btn tl-clip-mark';
+        quickSetStartBtn.type = 'button';
+        quickSetStartBtn.title = '设为起点 [Q]';
+        quickSetStartBtn.disabled = !canTimelineInteract;
+        const startLabel = document.createElement('span');
+        startLabel.className = 'clip-ctrl-mark-label';
+        startLabel.textContent = 'Start [Q]';
+        ctrlStartDisp = document.createElement('span');
+        ctrlStartDisp.className = 'clip-ctrl-mark-time';
+        ctrlStartDisp.textContent = tempStart !== null ? formatTime(tempStart) : '--:--:--';
+        quickSetStartBtn.appendChild(startLabel);
+        quickSetStartBtn.appendChild(ctrlStartDisp);
+        quickSetStartBtn.addEventListener('click', () => {
+            if (!currentVideoName || !__isVideoReady()) return;
+            const attempted = roundToMs(player.currentTime);
 
-        let __playBtnMovedByTimeCollapse = false;
+            // 若已设终点且起点晚于终点，则提示并不更新
+            if (tempEnd !== null && attempted > tempEnd) {
+                showToast('起点不能晚于终点，请先调整终点或重置起点', 'warning');
+                return;
+            }
 
-        timelineToolbar.appendChild(leftGroup);
-        timelineToolbar.appendChild(centerGroup);
-        timelineToolbar.appendChild(rightGroup);
+            tempStart = attempted;
+            updateClipInputs();
 
-        const _syncCompactActionsLayoutNow = () => {
-            if (!centerGroup.isConnected) return;
-            centerGroup.classList.remove('compact-actions-on');
-            const needCompact = (centerGroup.scrollWidth > centerGroup.clientWidth + 1);
-            centerGroup.classList.toggle('compact-actions-on', needCompact);
-            if (!needCompact) compactActionsGroup.classList.remove('open');
+            // 如果已设终点，则自动尝试添加片段
+            if (tempEnd !== null) {
+                __doAddClip();
+            }
+        });
+        clipGroup.appendChild(quickSetStartBtn);
+
+        quickSetEndBtn = document.createElement('button');
+        quickSetEndBtn.className = 'tl-btn tl-clip-mark';
+        quickSetEndBtn.type = 'button';
+        quickSetEndBtn.title = '设为终点并自动添加 [W]';
+        quickSetEndBtn.disabled = !canTimelineInteract;
+        const endLabel = document.createElement('span');
+        endLabel.className = 'clip-ctrl-mark-label';
+        endLabel.textContent = 'End [W]';
+        ctrlEndDisp = document.createElement('span');
+        ctrlEndDisp.className = 'clip-ctrl-mark-time';
+        ctrlEndDisp.textContent = tempEnd !== null ? formatTime(tempEnd) : '--:--:--';
+        quickSetEndBtn.appendChild(endLabel);
+        quickSetEndBtn.appendChild(ctrlEndDisp);
+        quickSetEndBtn.addEventListener('click', () => {
+            if (!currentVideoName || !__isVideoReady()) return;
+            const attempted = roundToMs(player.currentTime);
+
+            // 若已设起点且终点早于起点，则提示并不更新
+            if (tempStart !== null && attempted < tempStart) {
+                showToast('终点不能早于起点，请先调整起点或重置终点', 'warning');
+                return;
+            }
+
+            tempEnd = attempted;
+            updateClipInputs();
+            if (tempStart !== null) {
+                __doAddClip();
+            }
+        });
+        clipGroup.appendChild(quickSetEndBtn);
+
+
+        quickPlayClipBtn = document.createElement('button');
+        quickPlayClipBtn.className = 'tl-btn';
+        quickPlayClipBtn.type = 'button';
+        quickPlayClipBtn.textContent = '▶Play';
+        quickPlayClipBtn.title = '预览选中片段 [P]';
+        quickPlayClipBtn.disabled = !canTimelineInteract;
+        quickPlayClipBtn.addEventListener('click', () => {
+            triggerBtnFeedback(quickPlayClipBtn);
+            if (!currentVideoName || !__isVideoReady()) return;
+            if (typeof window.__tlTryPlaySelectedClips === 'function') window.__tlTryPlaySelectedClips();
+        });
+        clipGroup.appendChild(quickPlayClipBtn);
+        barCenter.appendChild(clipGroup);
+
+        // ---- D/J 导航按钮 —— 单独分组 ----
+        const navGroup = document.createElement('span');
+        navGroup.className = 'tl-anchor-group';
+
+        const jumpStartBtn = document.createElement('button');
+        jumpStartBtn.className = 'tl-btn';
+        jumpStartBtn.type = 'button';
+        jumpStartBtn.textContent = '⤒D';
+        jumpStartBtn.title = '从起点播放（选中片段则用片段起点） [D]';
+        jumpStartBtn.disabled = !canTimelineInteract;
+        jumpStartBtn.addEventListener('click', () => {
+            const sel = _tlGetSelectedClipsSorted();
+            const t = sel.length > 0 ? sel[0].start : (tempStart !== null ? Number(tempStart) : null);
+            if (t !== null && currentVideoName && __isVideoReady()) {
+                try { player.currentTime = t; player.play(); } catch (err) { }
+            } else {
+                showToast('请先设置起点', 'info');
+            }
+        });
+        navGroup.appendChild(jumpStartBtn);
+
+        const jumpEndBtn = document.createElement('button');
+        jumpEndBtn.className = 'tl-btn';
+        jumpEndBtn.type = 'button';
+        jumpEndBtn.textContent = '⤓J';
+        jumpEndBtn.title = '从终点播放（选中片段则用片段终点） [J]';
+        jumpEndBtn.disabled = !canTimelineInteract;
+        jumpEndBtn.addEventListener('click', () => {
+            const sel = _tlGetSelectedClipsSorted();
+            const t = sel.length > 0 ? sel[sel.length - 1].end : (tempEnd !== null ? Number(tempEnd) : null);
+            if (t !== null && currentVideoName && __isVideoReady()) {
+                try { player.currentTime = t; player.play(); } catch (err) { }
+            } else {
+                showToast('请先设置终点', 'info');
+            }
+        });
+        navGroup.appendChild(jumpEndBtn);
+        barCenter.appendChild(navGroup);
+
+        const barRight = document.createElement('span');
+        barRight.className = 'tl-bar-right';
+        // “更多”菜单（次要功能）
+        const moreGroup = document.createElement('span');
+        moreGroup.className = 'tl-dropdown tl-dropdown-right';
+        const moreToggle = document.createElement('button');
+        moreToggle.className = 'tl-btn';
+        moreToggle.type = 'button';
+        moreToggle.textContent = '•••';
+        moreToggle.title = '更多操作';
+        moreToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 关闭同级下拉菜单
+            document.querySelectorAll('.tl-dropdown.open').forEach(dd => { if (dd !== moreGroup) dd.classList.remove('open'); });
+            moreGroup.classList.toggle('open');
+        });
+        const moreMenu = document.createElement('div');
+        moreMenu.className = 'tl-dropdown-menu';
+
+        // “更多”菜单项
+        const moreItems = [
+            { label: '跟随播放', active: __tlFollowPlayhead, click: () => { _toggleFollowPlayhead(); } },
+            { label: '缩略图',   active: __tlThumbEnabled,     click: () => { if (_toggleThumb) _toggleThumb(); } },
+            { label: '波形',     active: __tlWaveformEnabled,  click: () => { if (_toggleWaveform) _toggleWaveform(); } },
+            'sep',
+            { label: '删除所选',  click: () => { _tlDeleteSelectedClips(); }, ref: 'delSelected' }
+        ];
+
+        const __moreMenuItemEls = {};
+        moreItems.forEach(item => {
+            if (item === 'sep') {
+                const sep = document.createElement('div');
+                sep.className = 'tl-dropdown-sep';
+                moreMenu.appendChild(sep);
+                return;
+            }
+            const btn = document.createElement('button');
+            btn.className = 'tl-dropdown-item' + (item.active ? ' active' : '');
+            btn.type = 'button';
+            btn.textContent = item.label;
+            btn.disabled = !canTimelineInteract;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                item.click();
+                // toggle类菜单项刷新状态而不关闭
+                if (['跟随播放','缩略图','波形'].includes(item.label)) {
+                    _syncMoreMenuState();
+                } else {
+                    moreGroup.classList.remove('open');
+                }
+            });
+            if (item.ref) __moreMenuItemEls[item.ref] = btn;
+            if (['跟随播放','缩略图','波形'].includes(item.label)) __moreMenuItemEls[item.label] = btn;
+            moreMenu.appendChild(btn);
+        });
+
+        function _syncMoreMenuState() {
+            if (__moreMenuItemEls['跟随播放']) __moreMenuItemEls['跟随播放'].classList.toggle('active', __tlFollowPlayhead);
+            if (__moreMenuItemEls['缩略图']) __moreMenuItemEls['缩略图'].classList.toggle('active', __tlThumbEnabled);
+            if (__moreMenuItemEls['波形']) __moreMenuItemEls['波形'].classList.toggle('active', __tlWaveformEnabled);
+        }
+
+        // 替换原来的 _syncFollowThumbWaveformState
+        const _origSync = _syncFollowThumbWaveformState;
+        _syncFollowThumbWaveformState = function() {
+            _origSync();
+            _syncMoreMenuState();
         };
 
-        const _syncToolbarRowsNow = () => {
-            if (!timelineToolbar.isConnected) return;
+        // delSelectedBtn 引用转移到菜单项
+        __tlDeleteSelectedBtn = __moreMenuItemEls.delSelected || delSelectedBtn;
 
-            timelineToolbar.classList.remove('two-row');
-            _syncCompactActionsLayoutNow();
+        moreGroup.appendChild(moreToggle);
+        moreGroup.appendChild(moreMenu);
+        barRight.appendChild(moreGroup);
 
-            const style = window.getComputedStyle(timelineToolbar);
-            const gapX = Number.parseFloat(style.columnGap || style.gap || '8') || 8;
-            const requiredOneRow = leftGroup.scrollWidth + centerGroup.scrollWidth + rightGroup.scrollWidth + (gapX * 2);
-            const available = timelineToolbar.clientWidth;
-            const needTwoRow = requiredOneRow > (available + 1);
+        if (openFileTreeBtnMain) { openFileTreeBtnMain.classList.add('tl-btn'); barRight.appendChild(openFileTreeBtnMain); }
+        if (fullscreenBtn) { fullscreenBtn.classList.add('tl-btn'); barRight.appendChild(fullscreenBtn); }
 
-            timelineToolbar.classList.toggle('two-row', needTwoRow);
+        title.appendChild(barLeft);
+        title.appendChild(barCenter);
+        title.appendChild(barRight);
 
-            const timeCollapsed = !!timeDisplay && (timeDisplay.scrollWidth > (timeDisplay.clientWidth + 1));
-            const leftGroupCrowded = !!leftGroup && (leftGroup.scrollWidth > (leftGroup.clientWidth + 1));
-            const shouldMovePlayBtn = !!playPauseBtn && needTwoRow && (leftGroupCrowded || timeCollapsed || __playBtnMovedByTimeCollapse);
-            if (playPauseBtn) {
-                if (shouldMovePlayBtn) {
-                    if (playPauseBtn.parentElement !== centerGroup) {
-                        centerGroup.insertBefore(playPauseBtn, centerGroup.firstChild || null);
-                    }
-                } else {
-                    if (playPauseBtn.parentElement !== leftGroup) {
-                        leftGroup.insertBefore(playPauseBtn, timeDisplay || null);
+        // 动态检测工具栏溢出，自动切换布局
+        let _tlRafId = 0;
+        let _tlCheckWrapScheduled = false;
+        function _tlCheckWrap() {
+            // 还原：把 right 移回 title
+            if (barRight.parentNode !== title) {
+                title.appendChild(barRight);
+                barCenter.classList.remove('tl-right-merged');
+            }
+            title.classList.remove('tl-wrapped');
+
+            const centerOverflows = barCenter.scrollWidth > barCenter.clientWidth + 1;
+            if (!centerOverflows) return;
+
+            title.classList.add('tl-wrapped');
+
+            // 检查中间栏是否内部换行（高度超过单行）
+            const firstBtn = barCenter.querySelector('.tl-btn');
+            const singleRowH = firstBtn ? firstBtn.offsetHeight : 24;
+            const centerWrapsInternally = barCenter.offsetHeight > singleRowH * 1.5;
+
+            if (centerWrapsInternally) {
+                // 把 right 移入 center，用 CSS order 插到 speed+zoom 后、QWCP 前
+                barCenter.appendChild(barRight);
+                barCenter.classList.add('tl-right-merged');
+            }
+        }
+
+        function _tlCheckWrapScheduledRaf() {
+            if (_tlCheckWrapScheduled) return;
+            _tlCheckWrapScheduled = true;
+            cancelAnimationFrame(_tlRafId);
+            _tlRafId = requestAnimationFrame(() => {
+                _tlCheckWrapScheduled = false;
+                _tlCheckWrap();
+            });
+        }
+
+        const _tlResizeObs = new ResizeObserver(_tlCheckWrapScheduledRaf);
+        _tlResizeObs.observe(title);
+        // 初始检查
+        _tlCheckWrapScheduledRaf();
+
+        // 全局点击关闭所有下拉菜单
+        title.addEventListener('click', (e) => {
+            title.querySelectorAll('.tl-dropdown.open').forEach(dd => {
+                if (!dd.contains(e.target)) dd.classList.remove('open');
+            });
+        });
+
+        // 下拉菜单打开时动态限制 max-height 不超出预览区域
+        function _capDropdownHeight(dropdown) {
+            const menu = dropdown.querySelector('.tl-dropdown-menu');
+            if (!menu) return;
+            menu.style.maxHeight = '';
+            requestAnimationFrame(() => {
+                const boundary = dropdown.closest('.preview-panel') || dropdown.closest('#playerWrapper') || document.documentElement;
+                const boundaryRect = boundary.getBoundingClientRect();
+                const menuRect = menu.getBoundingClientRect();
+                const topLimit = boundaryRect.top + 4;
+                if (menuRect.top < topLimit) {
+                    const cap = Math.max(60, menuRect.bottom - topLimit);
+                    menu.style.maxHeight = cap + 'px';
+                }
+            });
+        }
+
+        // 监听所有 dropdown 的 open 变化
+        const _ddObserver = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                if (m.type === 'attributes' && m.attributeName === 'class') {
+                    const dd = m.target;
+                    if (dd.classList.contains('tl-dropdown') && dd.classList.contains('open')) {
+                        _capDropdownHeight(dd);
                     }
                 }
             }
-            __playBtnMovedByTimeCollapse = shouldMovePlayBtn;
-
-            _syncCompactActionsLayoutNow();
-        };
-
-        const _syncCompactActionsLayout = () => {
-            if (__tlCompactLayoutRaf) cancelAnimationFrame(__tlCompactLayoutRaf);
-            __tlCompactLayoutRaf = requestAnimationFrame(() => {
-                __tlCompactLayoutRaf = 0;
-                _syncToolbarRowsNow();
-            });
-        };
-
-        title.appendChild(timelineToolbar);
-        title.addEventListener('click', (e) => {
-            if (!zoomGroup.contains(e.target)) zoomGroup.classList.remove('open');
-            if (!compactActionsGroup.contains(e.target)) compactActionsGroup.classList.remove('open');
         });
-        ctn.appendChild(title);
+        title.querySelectorAll('.tl-dropdown').forEach(dd => {
+            _ddObserver.observe(dd, { attributes: true, attributeFilter: ['class'] });
+        });
 
-        if (__tlToolbarResizeObserver) {
-            try { __tlToolbarResizeObserver.disconnect(); } catch (e) { }
-            __tlToolbarResizeObserver = null;
-        }
-        if (typeof ResizeObserver !== 'undefined') {
-            __tlToolbarResizeObserver = new ResizeObserver(() => { _syncCompactActionsLayout(); });
-            try { __tlToolbarResizeObserver.observe(timelineToolbar); } catch (e) { }
-            try { __tlToolbarResizeObserver.observe(centerGroup); } catch (e) { }
-            try { __tlToolbarResizeObserver.observe(leftGroup); } catch (e) { }
-            try { __tlToolbarResizeObserver.observe(rightGroup); } catch (e) { }
-        }
-        _syncCompactActionsLayout();
+        ctn.appendChild(title);
 
         // wrap（可视窗口，overflow:hidden，scrollLeft 控制平移）
         const wrap = document.createElement('div');
@@ -6796,12 +7229,6 @@ document.addEventListener('keydown', (e) => {
             }).catch(() => { });
         }
 
-        // 选区背景
-        const selEl = document.createElement('div');
-        selEl.className = 'timeline-selection';
-        selEl.id = 'tlSelection';
-        track.appendChild(selEl);
-
         // 播放头
         const ph = document.createElement('div');
         ph.className = 'timeline-playhead';
@@ -6839,39 +7266,6 @@ document.addEventListener('keydown', (e) => {
             try { if (!player.paused) player.pause(); } catch (err) { }
         });
 
-        // 锚点标记（固定指针，不随播放移动）
-        const anchor = document.createElement('div');
-        anchor.className = 'timeline-anchor';
-        anchor.id = 'tlAnchor';
-        const anchorLine = document.createElement('div');
-        anchorLine.className = 'timeline-anchor-line';
-        const anchorArrow = document.createElement('div');
-        anchorArrow.className = 'timeline-anchor-arrow';
-        const anchorLabel = document.createElement('div');
-        anchorLabel.className = 'timeline-anchor-label';
-        anchorLabel.id = 'tlAnchorLabel';
-        anchor.appendChild(anchorLine);
-        anchor.appendChild(anchorArrow);
-        anchor.appendChild(anchorLabel);
-        track.appendChild(anchor);
-
-        // 锚点箭头可拖拽移动
-        anchorArrow.addEventListener('mousedown', e => {
-            e.stopPropagation();
-            e.preventDefault();
-            if (!canTimelineInteract) return;
-            anchor.dataset.dragging = '1';
-            anchor.classList.add('dragging');
-            document.body.style.userSelect = 'none';
-        });
-
-        // 初始化锚点位置
-        if (__tlAnchorTime !== null && dur > 0) {
-            anchor.classList.add('active');
-            anchor.style.left = (__tlAnchorTime / dur * 100) + '%';
-            anchorLabel.textContent = _tlFmtFull(__tlAnchorTime);
-        }
-
         // Q 手柄（起点）
         const hStart = _makeHandle('start', 'Q');
         hStart.id = 'tlHandleStart';
@@ -6895,11 +7289,6 @@ document.addEventListener('keydown', (e) => {
             h.style.right = '0';
             wrap.appendChild(h);
         }
-        const boxSel = document.createElement('div');
-        boxSel.className = 'timeline-box-select';
-        boxSel.id = 'tlBoxSelectRect';
-        boxSel.style.display = 'none';
-        wrap.appendChild(boxSel);
         ctn.appendChild(wrap);
 
         // ---- 自定义滚动条 ----
@@ -6923,6 +7312,14 @@ document.addEventListener('keydown', (e) => {
             _tlMaybeShowFollowSbHint();
             document.body.style.userSelect = 'none';
         });
+        sbThumb.addEventListener('touchstart', e => {
+            // 触摸拖拽滚动条
+            __tlSbDragging = true;
+            __tlSbStartX = e.touches[0]?.clientX || 0;
+            __tlSbStartSL = wrap.scrollLeft;
+            _tlMaybeShowFollowSbHint();
+        }, { passive: true });
+
         // 点击滚动槽（非滑块）：跳转
         sb.addEventListener('click', e => {
             if (e.target === sbThumb) return;
@@ -6936,6 +7333,13 @@ document.addEventListener('keydown', (e) => {
         // 同步 wrap 滚动 → 更新滑块
         wrap.addEventListener('scroll', _tlSbUpdate);
 
+        // ---- 同步设置 inner 宽度并恢复滚动位置（避免闪烁）----
+        const wrapW = wrap.clientWidth;
+        if (wrapW > 0) {
+            inner.style.width = (wrapW * __tlZoom) + 'px';
+        }
+        if (prevScrollLeft > 0) wrap.scrollLeft = prevScrollLeft;
+
         // ---- 应用当前缩放（构建标尺 + 更新宽度）----
         requestAnimationFrame(() => {
             _applyZoom();
@@ -6946,29 +7350,18 @@ document.addEventListener('keydown', (e) => {
 
         // （滚轮 / 中键平移已移除，改用挡位按钮 + 自定义滚动条）
 
-        // ---- 交互：框选片段 ----
-        wrap.addEventListener('mousedown', e => {
-            if (e.button !== 0) return;
-            if (e.target.closest('.timeline-handle') || e.target.closest('.timeline-clip') || e.target.closest('.timeline-playhead-arrow-top') || e.target.closest('.timeline-anchor-arrow')) return;
-            __tlBoxSelecting = true;
-            __tlBoxMoved = false;
-            __tlBoxStartX = e.clientX;
-            __tlBoxStartY = e.clientY;
-            document.body.style.userSelect = 'none';
-            const box = document.getElementById('tlBoxSelectRect');
-            if (box) box.style.display = 'none';
-            e.preventDefault();
-        });
-
-        // ---- 交互：点击定位锚点标记（不影响播放头）----
+        // ---- 交互：点击时间轴移动播放头 ----
         wrap.addEventListener('click', e => {
             zoomGroup.classList.remove('open');
             if (__tlSuppressWrapClick) { __tlSuppressWrapClick = false; return; }
-            if (e.target.closest('.timeline-handle') || e.target.closest('.timeline-clip') || e.target.closest('.timeline-playhead-arrow-top') || e.target.closest('.timeline-anchor-arrow')) return;
+            if (e.target.closest('.timeline-handle') || e.target.closest('.timeline-clip') || e.target.closest('.timeline-playhead-arrow-top')) return;
             if (!canTimelineInteract) return;
             const innerX = _tlClientToInnerX(e.clientX);
             const t = _tlXToTime(innerX);
-            _tlPlaceAnchor(t);
+            try {
+                player.pause();
+                player.currentTime = t;
+            } catch (err) { }
         });
 
         // ---- 交互：hover 时间游标 ----
@@ -7000,59 +7393,6 @@ document.addEventListener('keydown', (e) => {
         if (typeof updateProgress === 'function') updateProgress(player.currentTime, player.duration);
     }
 
-    // ---- 锚点标记：放置 / 更新 / 跳转 ----
-    function _tlPlaceAnchor(t) {
-        const dur = _tlDur();
-        if (!dur || !currentVideoName || !__isVideoReady()) return;
-        __tlAnchorTime = Math.max(0, Math.min(dur, t));
-        _tlUpdateAnchor();
-    }
-
-    function _tlUpdateAnchor() {
-        const el = document.getElementById('tlAnchor');
-        const label = document.getElementById('tlAnchorLabel');
-        if (!el) return;
-        const dur = _tlDur();
-        if (__tlAnchorTime === null || !dur || !currentVideoName || !__isVideoReady()) {
-            el.classList.remove('active');
-            return;
-        }
-        el.classList.add('active');
-        el.style.left = (__tlAnchorTime / dur * 100) + '%';
-        if (label) label.textContent = _tlFmtFull(__tlAnchorTime);
-    }
-
-    function _tlJumpToAnchor() {
-        if (__tlAnchorTime === null) {
-            try { showToast('未设定锚点，请先点击时间轴放置锚点'); } catch (e) { }
-            return;
-        }
-        try { player.currentTime = __tlAnchorTime; } catch (e) { }
-        try { showToast('已跳转到锚点 ' + _tlFmtFull(__tlAnchorTime)); } catch (e) { }
-    }
-
-    function _tlPlaceAnchorAtPlayhead() {
-        if (!currentVideoName || !__isVideoReady()) return;
-        const t = player.currentTime;
-        _tlPlaceAnchor(t);
-        try { showToast('锚点已定位到播放头 ' + _tlFmtFull(t)); } catch (e) { }
-    }
-
-    function _tlMoveAnchor(deltaSec) {
-        if (!currentVideoName || !__isVideoReady()) return;
-        const dur = _tlDur();
-        if (!dur) return;
-        // 若锚点未设定，以当前播放头位置初始化
-        if (__tlAnchorTime === null) __tlAnchorTime = player.currentTime || 0;
-        __tlAnchorTime = Math.max(0, Math.min(dur, __tlAnchorTime + deltaSec));
-        _tlUpdateAnchor();
-        try { showToast((deltaSec > 0 ? '锚点前进' : '锚点后退') + ' ' + Math.abs(deltaSec) + 's → ' + _tlFmtFull(__tlAnchorTime)); } catch (e) { }
-    }
-
-    function _tlGetAnchorTime() {
-        return __tlAnchorTime;
-    }
-
     // ---- 构造手柄 DOM ----
     function _makeHandle(type, key) {
         const h = document.createElement('div');
@@ -7066,6 +7406,11 @@ document.addEventListener('keydown', (e) => {
             </div>`;
 
         h.addEventListener('mousedown', e => {
+            if (__isClipEditLocked()) {
+                showAlertModal('当前正在切片或已有合并任务排队，无法调整片段位置');
+                e.preventDefault();
+                return;
+            }
             e.stopPropagation();
             e.preventDefault();
             __tlDragging = type;
@@ -7074,6 +7419,10 @@ document.addEventListener('keydown', (e) => {
             document.body.style.userSelect = 'none';
         });
         h.addEventListener('touchstart', e => {
+            if (__isClipEditLocked()) {
+                showAlertModal('当前正在切片或已有合并任务排队，无法调整片段位置');
+                return;
+            }
             e.stopPropagation();
             __tlDragging = type;
             __tlDragDuration = _tlDur();
@@ -7084,10 +7433,7 @@ document.addEventListener('keydown', (e) => {
 
     // ---- 全局 mousemove（播放头拖拽 + 锚点拖拽 + 手柄拖拽 + 平移结束）----
     document.addEventListener('mousemove', e => {
-        if (__tlBoxSelecting) {
-            _tlUpdateBoxSelection(e.clientX, e.clientY);
-            return;
-        }
+        // 关闭框选功能：即使 __tlBoxSelecting 为 true，也不做处理
         // 播放头拖拽（剪映风格 scrub）
         if (__tlPlayheadDragging) {
             const inner = _tlInner() || __tlDragTrackEl;
@@ -7100,22 +7446,6 @@ document.addEventListener('keydown', (e) => {
             try { player.currentTime = t; } catch (err) { }
             _showTip(`<div>${_tlFmtFull(t)}</div>`, e.clientX, e.clientY);
             return;
-        }
-        // 锚点拖拽
-        {
-            const anchorEl = document.getElementById('tlAnchor');
-            if (anchorEl && anchorEl.dataset.dragging === '1') {
-                const inner = _tlInner() || __tlDragTrackEl;
-                if (!inner) return;
-                const rect = inner.getBoundingClientRect();
-                const dur = _tlDur();
-                if (!dur) return;
-                const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                const t = pct * dur;
-                _tlPlaceAnchor(t);
-                _showTip(`<div>锚点: ${_tlFmtFull(t)}</div>`, e.clientX, e.clientY);
-                return;
-            }
         }
         // 手柄拖拽
         if (__tlDragging) {
@@ -7156,16 +7486,7 @@ document.addEventListener('keydown', (e) => {
     });
 
     document.addEventListener('mouseup', e => {
-        if (__tlBoxSelecting) {
-            _tlUpdateBoxSelection(e.clientX, e.clientY);
-            const box = document.getElementById('tlBoxSelectRect');
-            if (box) box.style.display = 'none';
-            __tlSuppressWrapClick = __tlBoxMoved;
-            __tlBoxSelecting = false;
-            __tlBoxMoved = false;
-            document.body.style.userSelect = '';
-            return;
-        }
+        // 框选模式已关闭，直接处理拖拽结束
         if (__tlDragging) {
             const cls = `timeline-handle-${__tlDragging}`;
             document.querySelector(`.${cls}`)?.classList.remove('dragging');
@@ -7180,22 +7501,35 @@ document.addEventListener('keydown', (e) => {
             document.body.style.userSelect = '';
             _hideTip();
         }
-        {
-            const anchorEl = document.getElementById('tlAnchor');
-            if (anchorEl && anchorEl.dataset.dragging === '1') {
-                delete anchorEl.dataset.dragging;
-                anchorEl.classList.remove('dragging');
-                document.body.style.userSelect = '';
-                _hideTip();
-            }
-        }
         if (__tlSbDragging) {
             __tlSbDragging = false;
             document.body.style.userSelect = '';
         }
     });
 
+    document.addEventListener('touchmove', e => {
+        if (!__tlSbDragging) return;
+        e.preventDefault();
+        const sb = document.getElementById('tlScrollbar');
+        const wrap = _tlWrap();
+        if (!sb || !wrap) return;
+        const rect = sb.getBoundingClientRect();
+        const thumbW = Math.max(10, wrap.clientWidth / __tlZoom);
+        const maxL = sb.clientWidth - thumbW;
+        if (maxL <= 0) return;
+
+        const touch = e.touches[0];
+        const deltaX = (touch?.clientX || 0) - __tlSbStartX;
+        const moveRatio = deltaX / maxL;
+        const maxSL = wrap.scrollWidth - wrap.clientWidth;
+        wrap.scrollLeft = __tlSbStartSL + moveRatio * maxSL;
+        _tlSbUpdate();
+    });
+
     document.addEventListener('touchend', () => {
+        if (__tlSbDragging) {
+            __tlSbDragging = false;
+        }
         if (!__tlDragging) return;
         const cls = `timeline-handle-${__tlDragging}`;
         document.querySelector(`.${cls}`)?.classList.remove('dragging');
@@ -7221,20 +7555,7 @@ document.addEventListener('keydown', (e) => {
 
     // ---- 更新选区 ----
     function _tlUpdateSelection() {
-        const dur = _tlDur();
-        const sel = document.getElementById('tlSelection'); if (!sel) return;
-        if (!dur || !currentVideoName || !__isVideoReady()) {
-            sel.style.display = 'none';
-            return;
-        }
-        const ts = _getTS(), te = _getTE();
-        if (ts !== null && te !== null && te > ts) {
-            sel.style.left = (ts / dur * 100) + '%';
-            sel.style.width = ((te - ts) / dur * 100) + '%';
-            sel.style.display = '';
-        } else {
-            sel.style.display = 'none';
-        }
+        // 选区框已被移除，不再渲染
     }
 
     // ---- 更新播放头 ----
@@ -7302,27 +7623,16 @@ document.addEventListener('keydown', (e) => {
     } catch (e) { }
 
     // ---- MutationObserver：起终点变化 → 更新手柄 ----
-    try {
-        const obs = new MutationObserver(() => { _tlUpdateHandles(); _tlUpdateSelection(); });
-        const opts = { childList: true, characterData: true, subtree: true };
-        const sd = document.getElementById('ctrlStartDisp');
-        const ed = document.getElementById('ctrlEndDisp');
-        if (sd) obs.observe(sd, opts);
-        if (ed) obs.observe(ed, opts);
-    } catch (e) { }
-
     // 初始渲染
     try { renderTimeline(); } catch (e) { }
 
     // 暴露
     window.__tlRenderTimeline = renderTimeline;
     window.__tlUpdateSelection = _tlUpdateSelection;
+    window.__tlUpdateHandles = _tlUpdateHandles;
     window.__tlUpdatePlayhead = _tlUpdatePlayhead;
     window.__tlTryPlaySelectedClips = _tlTryPlaySelectedClips;
-    window.__tlJumpToAnchor = _tlJumpToAnchor;
-    window.__tlPlaceAnchorAtPlayhead = _tlPlaceAnchorAtPlayhead;
-    window.__tlMoveAnchor = _tlMoveAnchor;
-    window.__tlGetAnchorTime = _tlGetAnchorTime;
+    window.__tlGetSelectedClipsSorted = _tlGetSelectedClipsSorted;
     window.__tlSuppressAutoFollow = function (ms) {
         const hold = Math.max(0, Number(ms) || 0);
         __tlSuppressFollowUntil = Date.now() + hold;

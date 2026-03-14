@@ -29,82 +29,54 @@
                     <!-- 1. 工具简介 -->
                     <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📌 工具简介</div>
                     <div style="margin:0 0 14px 10px;">
-                        这是一个专为括弧笑直播回放设计的<strong>在线视频切片工具</strong>，支持从多个视频中提取精彩片段并合并为一个完整视频。所有代码均使用 AI 生成，如有 bug 欢迎私信反馈。
+                        这是一个用于从本地视频源快速提取片段并合并输出的<strong>在线切片工具</strong>，适用于直播回放、剪辑合集等场景。它提供可视化时间轴、片段管理与一键合并功能。
                     </div>
 
                     <!-- 2. 快速上手 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🚀 快速上手（5 步完成切片）</div>
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🚀 快速上手（3 步完成切片）</div>
                     <ol style="margin:0 0 14px 18px; padding:0;">
-                        <li><strong>选择视频</strong> — 点击左侧"选择视频"按钮，在文件树中选择目标视频</li>
-                        <li><strong>加载预览</strong> — 选择后点击"预览"按钮加载视频画面</li>
-                        <li><strong>定位 &amp; 标记</strong> — 播放视频，找到目标位置后按 <code>Q</code>&thinsp;设起点、按 <code>W</code>&thinsp;设终点（自动添加片段）</li>
-                        <li><strong>重复添加</strong> — 继续标记更多片段，支持跨视频选取</li>
-                        <li><strong>开始合并</strong> — 填写用户名，点击"开始合并"等待输出</li>
+                        <li><strong>选择视频</strong> — 点击“选择视频”打开目录树，点选你要编辑的视频</li>
+                        <li><strong>标记片段</strong> — 播放视频，用 <code>Q</code> 设起点、<code>W</code> 设终点（设置完成后自动加入片段）</li>
+                        <li><strong>开始合并</strong> — 在“提交合并”区域填写用户名，点击“开始合并”生成新文件</li>
                     </ol>
 
-                    <!-- 3. 核心概念：锚点与播放头 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🎯 核心概念：锚点与播放头</div>
+                    <!-- 3. 关键概念 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🎯 核心概念：时间轴与片段</div>
                     <div style="margin:0 0 6px 10px; font-size:12px;">
-                        本工具采用<strong>双指针</strong>交互设计，理解这两个概念是高效操作的关键：
+                        本工具基于“时间轴+片段列表”进行编辑：
                     </div>
-                    <div style="margin:0 0 4px 10px; padding:8px 10px; background:rgba(255,255,255,0.05); border-radius:6px; font-size:12px;">
-                        <div style="margin-bottom:6px;">
-                            <strong style="color:#4fc3f7;">▶ 播放头（蓝色）</strong>
-                            — 视频当前播放位置，按空格播放/暂停时移动的指针。
-                        </div>
-                        <div>
-                            <strong style="color:#ff9800;">▼ 锚点（橙色）</strong>
-                            — 固定的时间标记，<strong>不会</strong>随播放移动。用于精确定位切片位置。点击时间轴或使用方向键可放置/移动锚点。
-                        </div>
-                    </div>
-                    <div style="margin:4px 0 14px 10px; font-size:12px; opacity:0.85;">
-                        <strong>工作流</strong>：播放发现感兴趣的内容 → 按 <code>J</code> 将锚点放到播放头位置 → 用 <code>←</code> <code>→</code> 微调锚点 → <code>Q</code> 设起点 → 继续调整 → <code>W</code> 设终点并自动添加片段。
+                    <div style="margin:0 0 14px 10px; font-size:12px;">
+                        <div style="margin-bottom:6px;"><strong>▶ 播放头</strong>：当前播放位置，播放/暂停时会移动。</div>
+                        <div><strong>▼ 起点/终点</strong>：通过 <code>Q</code>/<code>W</code> 设置，形成一个完整片段（自动加入片段列表）。</div>
                     </div>
 
-                    <!-- 4. 完整快捷键 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⌨️ 快捷键一览</div>
+                    <!-- 4. 常用快捷键 -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⌨️ 常用快捷键</div>
                     <div style="margin:0 0 4px 10px; font-size:11px; opacity:0.7;">
-                        提示：快捷键仅在视频加载后生效，且焦点不在输入框时有效
+                        快捷键只在视频已加载、焦点不在输入框时有效
                     </div>
                     <div style="margin:0 0 14px 10px;">
-                        <!-- 播放控制 -->
-                        <div style="font-weight:700; font-size:12px; margin:6px 0 4px; color:var(--accent-color); opacity:0.8;">播放控制</div>
+                        <div style="font-weight:700; font-size:12px; margin:6px 0 4px; color:var(--accent-color); opacity:0.8;">编辑</div>
+                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
+                            <code>Q</code><span>设置起点</span>
+                            <code>W</code><span>设置终点并自动添加片段</span>
+                            <code>C / Enter</code><span>手动添加片段</span>
+                        </div>
+                        <div style="font-weight:700; font-size:12px; margin:8px 0 4px; color:var(--accent-color); opacity:0.8;">播放</div>
                         <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
                             <code>空格</code><span>播放 / 暂停</span>
-                        </div>
-                        <!-- 锚点操作 -->
-                        <div style="font-weight:700; font-size:12px; margin:8px 0 4px; color:var(--accent-color); opacity:0.8;">锚点操作</div>
-                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
-                            <code>← / →</code><span>锚点后退 / 前进 1 秒</span>
-                            <code>J</code><span>将锚点放置到当前播放头位置</span>
-                            <code>D</code><span>将播放头跳转到锚点位置</span>
-                        </div>
-                        <!-- 片段操作 -->
-                        <div style="font-weight:700; font-size:12px; margin:8px 0 4px; color:var(--accent-color); opacity:0.8;">片段标记</div>
-                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
-                            <code>Q</code><span>从锚点位置设定片段起点</span>
-                            <code>W</code><span>从锚点位置设定片段终点（起点已设则自动添加）</span>
-                            <code>C / Enter</code><span>手动确认添加片段</span>
-                        </div>
-                        <!-- 辅助快捷键 -->
-                        <div style="font-weight:700; font-size:12px; margin:8px 0 4px; color:var(--accent-color); opacity:0.8;">辅助操作</div>
-                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
-                            <code>P</code><span>预览时间轴上选中的片段</span>
-                            <code>[</code><span>跳转到当前片段起点（方便微调）</span>
+                            <code>P</code><span>预览已选片段</span>
+                            <code>← / →</code><span>移动锚点</span>
                         </div>
                     </div>
 
-                    <!-- 5. 时间轴交互 -->
+                    <!-- 5. 时间轴操作 -->
                     <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📐 时间轴操作</div>
                     <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>点击时间轴空白处</strong> — 放置锚点到该位置</li>
-                        <li><strong>拖拽锚点</strong> — 按住锚点箭头可自由拖动定位</li>
-                        <li><strong>拖拽 Q / W 手柄</strong> — 直接拖拽起点/终点手柄调整已设定的位置</li>
-                        <li><strong>点击片段色块</strong> — 选中/取消选中片段（可多选）</li>
-                        <li><strong>框选</strong> — 在时间轴空白处拖拽可框选多个片段</li>
-                        <li><strong>缩放挡位</strong> — 使用工具栏按钮切换 1×~64× 缩放级别</li>
-                        <li><strong>跟随播放头</strong> — 点击"📍"按钮切换是否自动跟随播放位置</li>
-                        <li><strong>鼠标悬停</strong> — 显示时间游标和精确时间提示</li>
+                        <li><strong>点击时间轴空白处</strong>：跳转播放位置</li>
+                        <li><strong>拖拽 Q/W 手柄</strong>：微调起点/终点</li>
+                        <li><strong>使用缩放按钮</strong>：调整时间轴细节（支持 1×~256×）</li>
+                        <li><strong>启用“跟随播放头”</strong>：播放时自动滚动到当前位置</li>
                     </ul>
 
                     <!-- 6. 视频播放器 -->
@@ -138,12 +110,7 @@
                     <!-- 9. 合并与导出 -->
                     <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🔨 合并与导出</div>
                     <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>切割模式</strong>：
-                            <ul style="margin:4px 0 4px 14px; padding:0;">
-                                <li><strong>快速切割</strong> — 速度快，可能有 ±几秒误差，最长 120 分钟</li>
-                                <li><strong>精准切割</strong> — 逐帧重编码，精确到帧，速度较慢，最长 30 分钟</li>
-                            </ul>
-                        </li>
+                        <li><strong>切割模式</strong>：默认精准切割，精确到帧，最长 30 分钟</li>
                         <li><strong>视频源</strong>：可选"压制版"（含弹幕字幕）或"原版"（无弹幕）</li>
                         <li><strong>文件名自定义</strong> — 可设置输出文件名，实时预览最终文件名</li>
                         <li><strong>预览合并</strong> — 合并前可预览所有片段的连续播放效果，并拖拽调整顺序</li>
@@ -190,7 +157,8 @@
         <div class="modal">
             <div id="modalTitle" class="modal-header">提示</div>
             <div id="modalMessage" class="modal-body"></div>
-            <div class="modal-actions">
+            <div class="modal-actions" id="modalActions">
+                <!-- checkbox will be injected here when needed -->
                 <button id="modalCancel" class="modal-btn" type="button">取消</button>
                 <button id="modalOk" class="modal-btn modal-btn-primary" type="button">确定</button>
             </div>
@@ -378,20 +346,22 @@
                             <div class="buttons-row main-ctrls">
                                 <!-- 左侧：播放与时间 -->
                                 <div class="ctrl-group left">
+                                    <button id="backwardBtn" class="icon-btn" title="后退5秒" disabled>后退</button>
                                     <button id="playPauseBtn" class="icon-btn" title="播放/暂停" disabled>播放</button>
+                                    <button id="forwardBtn" class="icon-btn" title="前进5秒" disabled>前进</button>
                                     <span id="timeDisplay" class="time-text">00:00:00 / 00:00:00</span>
                                 </div>
 
                                 <!-- 右侧：倍速 + 选择视频（已集成） -->
                                 <div class="ctrl-group right">
-                                    <span id="speedSelectGroup" class="tl-zoom-group tl-zoom-collapsed">
-                                        <button id="speedSelectToggle" class="tl-zoom-btn tl-zoom-toggle" type="button"
+                                    <span id="speedSelectGroup" class="tl-dropdown">
+                                        <button id="speedSelectToggle" class="tl-btn" type="button"
                                             title="播放速度" disabled>1.0x ▾</button>
-                                        <div id="speedSelectMenu" class="tl-zoom-menu">
-                                            <button class="tl-zoom-menu-item" type="button" data-speed="0.5">0.5x</button>
-                                            <button class="tl-zoom-menu-item active" type="button" data-speed="1.0">1.0x</button>
-                                            <button class="tl-zoom-menu-item" type="button" data-speed="1.25">1.25x</button>
-                                            <button class="tl-zoom-menu-item" type="button" data-speed="1.5">1.5x</button>
+                                        <div id="speedSelectMenu" class="tl-dropdown-menu">
+                                            <button class="tl-dropdown-item" type="button" data-speed="0.5">0.5x</button>
+                                            <button class="tl-dropdown-item active" type="button" data-speed="1.0">1.0x</button>
+                                            <button class="tl-dropdown-item" type="button" data-speed="1.25">1.25x</button>
+                                            <button class="tl-dropdown-item" type="button" data-speed="1.5">1.5x</button>
                                         </div>
                                     </span>
 
@@ -417,23 +387,7 @@
                             <!-- 时间轴编辑区 -->
                             <div id="timelineArea" class="timeline-in-controls"></div>
 
-                            <!-- 裁切控制行 -->
-                            <div class="clip-ctrl-bar">
-                                <button id="quickSetStartBtn" class="icon-btn shortcut-btn-group clip-ctrl-mark"
-                                    title="设为起点 [Q]" disabled>
-                                    <span class="clip-ctrl-mark-label">Start [Q]</span>
-                                    <span id="ctrlStartDisp" class="clip-ctrl-mark-time">--:--:--</span>
-                                </button>
-                                <button id="quickSetEndBtn" class="icon-btn shortcut-btn-group clip-ctrl-mark"
-                                    title="设为终点并自动添加片段 [W]" disabled>
-                                    <span class="clip-ctrl-mark-label">End+Add [W]</span>
-                                    <span id="ctrlEndDisp" class="clip-ctrl-mark-time">--:--:--</span>
-                                </button>
-                                <button id="quickPlayClipBtn" class="icon-btn clip-ctrl-action" title="预览选中片段 [P]" disabled>▶
-                                    Play [P]</button>
-                                <button id="quickAddClipBtnCtrl" class="icon-btn clip-ctrl-action clip-ctrl-add"
-                                    title="添加片段 [C]" disabled>＋ Add [C]</button>
-                            </div>
+
                         </div>
                     </div>
 
@@ -484,6 +438,10 @@
                             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                                 <button id="previewMergeBtn"
                                     style="padding:2px 8px; font-size:12px; background:rgba(79, 158, 255, 0.25);">预览合并</button>
+                                <button id="exportClipsBtn" onclick="__exportClips()"
+                                    style="padding:2px 8px; font-size:12px; background:rgba(79, 200, 100, 0.25);">导出</button>
+                                <button id="importClipsBtn" onclick="__importClips()"
+                                    style="padding:2px 8px; font-size:12px; background:rgba(200, 150, 50, 0.25);">导入</button>
                                 <button id="clearAllClipsFn"
                                     style="padding:2px 8px; font-size:12px; background:rgba(255,50,50,0.3);">清空</button>
                             </div>
@@ -534,25 +492,7 @@
                         </div>
                     </div>
 
-                    <div class="merge-submit-field" style="margin-bottom:12px;">
-                        <div style="display:block; margin-bottom:6px; font-weight:700;">切割模式</div>
-                        <div class="source-selection-group">
-                            <label class="source-option">
-                                <input type="radio" name="cutMode" value="fast">
-                                <div class="source-content">
-                                    <span class="source-title">快速切割</span>
-                                    <span class="source-desc">速度快，切点可能不精准（±几秒）。最大 <strong>120 分钟</strong></span>
-                                </div>
-                            </label>
-                            <label class="source-option">
-                                <input type="radio" name="cutMode" value="precise" checked>
-                                <div class="source-content">
-                                    <span class="source-title">精准切割</span>
-                                    <span class="source-desc">精确到帧，但需要重新编码，速度较慢。最大 <strong>30 分钟</strong></span>
-                                </div>
-                            </label>
-                        </div>
-                    </div>
+
 
                     <div class="merge-submit-actions">
                         <button id="mergeAllBtn">开始合并</button>
@@ -604,19 +544,16 @@
 
     <!-- 进度弹窗 -->
     <div id="progressModalOverlay" class="modal-overlay" aria-hidden="true">
-        <div class="modal" role="dialog" aria-modal="true" style="max-width: 520px; width: 90%;">
-            <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between;">
-                <span id="progressModalTitle" style="font-size: 15px;">合并进度</span>
+        <div class="modal progress-modal" role="dialog" aria-modal="true">
+            <div class="modal-header progress-modal-header">
+                <span id="progressModalTitle">合并进度</span>
                 <button type="button" class="modal-btn close-modal" aria-label="关闭">×</button>
             </div>
-            <div class="modal-body" id="progressModalBody" style="padding-bottom: 0;">
+            <div class="modal-body" id="progressModalBody">
                 <!-- 动态内容渲染至此 -->
             </div>
-
-            <!-- 常驻：取消当前任务（始终显示） -->
-            <div class="modal-actions" style="justify-content: center; padding: 16px;">
-                <button id="cancelMergeBtnModalFixed" type="button" class="modal-btn modal-btn-danger"
-                    style="width:100%; justify-content:center;">取消当前任务</button>
+            <div class="modal-footer progress-modal-footer">
+                <button id="cancelMergeBtnModalFixed" type="button" class="modal-btn modal-btn-danger">取消当前任务</button>
             </div>
         </div>
     </div>
