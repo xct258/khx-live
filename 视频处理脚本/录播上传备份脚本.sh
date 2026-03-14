@@ -413,7 +413,7 @@ else
 
         log info "备份录制源文件"
 
-        target_dir="${source_backup}/videos/${streamer_name}/源文件/${formatted_start_time_3}/"
+        target_dir="${source_backup}/videos/${streamer_name}/原文件/${formatted_start_time_3}/"
         mkdir -p "$target_dir"
 
         mv "${cache_dir}"/*.mp4 "$target_dir" 2>/dev/null
