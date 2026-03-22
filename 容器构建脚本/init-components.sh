@@ -104,6 +104,8 @@ wget -O /opt/bililive/scripts/log.sh https://raw.githubusercontent.com/xct258/kh
 wget -O /opt/bililive/scripts/自动选择onedrive网盘.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/自动选择onedrive网盘.sh
 wget -O /opt/bililive/scripts/弹幕偏移脚本.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/弹幕偏移脚本.sh
 wget -O /opt/bililive/scripts/xml转ass.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/xml转ass.sh
+wget -O /opt/bililive/scripts/更新录播姬配置文件.py https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/更新录播姬配置文件.py
+
 wget -O /opt/webclip/app.py https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/app.py
 wget -O /opt/webclip/static/favicon.ico https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/favicon.ico
 wget -O /opt/webclip/static/script.js https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/script.js
