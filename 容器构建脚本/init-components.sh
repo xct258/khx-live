@@ -111,3 +111,8 @@ wget -O /opt/webclip/static/style.css https://raw.githubusercontent.com/xct258/k
 wget -O /opt/webclip/templates/index.html https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/templates/index.html
 chmod +x /opt/bililive/scripts/*.sh
 chmod +x /opt/bililive/biliup/*.sh
+
+# 在容器构建时写入版本文件（直接通过 date 获取当前时间）
+mkdir -p /app
+build_date="$(date '+%Y-%m-%d %H:%M:%S')"
+echo "BUILD_DATE=${build_date}" > /app/version.txt

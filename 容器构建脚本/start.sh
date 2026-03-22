@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# 启动时把构建时 version 信息移动到 /rec/version.txt
+mkdir -p /rec
+if [ -f /app/version.txt ]; then
+    cp /app/version.txt /rec/version.txt
+fi
+
 mkdir -p /rec/biliup/脚本
 mkdir -p /rec/录播姬
 mkdir -p /rec/脚本
