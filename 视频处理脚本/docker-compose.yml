@@ -1,0 +1,12 @@
+services:
+  khx-live:
+    container_name: khx-live
+    image: xct258/khx-live
+    network_mode: host
+    environment:
+      XCT258_GITHUB_TOKEN: ""      # github的token，用于下载配置文件
+      Bililive_USER: "xct258"      # 录播姬默认用户名
+      Bililive_PASS: "xct258"      # 录播姬默认随机密码
+    volumes:
+      - ./data:/rec
+    restart: always
