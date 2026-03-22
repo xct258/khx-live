@@ -344,7 +344,7 @@ else
 
     if [[ "$streamer_name" == "括弧笑bilibili" && " ${update_servers[*]} " == *" $recording_platform "* ]]; then
       # 构建视频标题
-      upload_title_1="${formatted_start_time_4}"
+      upload_title_1="${formatted_start_time_4} [${stream_title}]"
       # 构建视频简介
       upload_desc_1=$(generate_upload_desc "$stream_title" "$formatted_start_time_2")
       
