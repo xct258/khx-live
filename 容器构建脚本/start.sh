@@ -146,8 +146,76 @@ if ! pgrep -f "BililiveRecorder.Cli" > /dev/null; then
 else
   echo "------------------------------------"
   echo "$(date)"
-  echo "录播姬运行中"
+  echo "录播姬运行中，正在检测配置更新需求..."
   echo "------------------------------------"
+
+  # 先检测是否有配置更新需求
+  UPDATE_SCRIPT="/rec/脚本/更新录播姬配置文件.py"
+  if [ ! -f "$UPDATE_SCRIPT" ]; then
+    UPDATE_SCRIPT="/opt/bililive/scripts/更新录播姬配置文件.py"
+  fi
+
+  if [ ! -f "$UPDATE_SCRIPT" ]; then
+    echo "未找到更新脚本：$UPDATE_SCRIPT" >&2
+    UPDATE_RESULT=253
+  else
+    echo "检测是否需要更新录播姬配置：$UPDATE_SCRIPT"
+    if command -v python3 >/dev/null 2>&1; then
+      python3 "$UPDATE_SCRIPT" --check
+      UPDATE_RESULT=$?
+    elif command -v python >/dev/null 2>&1; then
+      python "$UPDATE_SCRIPT" --check
+      UPDATE_RESULT=$?
+    else
+      echo "未找到 python，无法执行更新脚本"
+      UPDATE_RESULT=254
+    fi
+  fi
+
+  if [ "$UPDATE_RESULT" -eq 0 ]; then
+    echo "无配置更新，保持当前录播姬进程。"  # 不关闭/不重启
+  elif [ "$UPDATE_RESULT" -eq 1 ]; then
+    echo "检测到配置需要更新，准备停止录播姬。"
+    pkill -f "BililiveRecorder.Cli" || true
+
+    timeout=30
+    while pgrep -f "BililiveRecorder.Cli" > /dev/null && [ "$timeout" -gt 0 ]; do
+      sleep 1
+      timeout=$((timeout - 1))
+    done
+
+    if pgrep -f "BililiveRecorder.Cli" > /dev/null; then
+      echo "错误: 录播姬未能停止，后续不再尝试。"
+    else
+      echo "录播姬已停止，执行一次更新脚本以写入配置。"
+      if command -v python3 >/dev/null 2>&1; then
+        python3 "$UPDATE_SCRIPT"
+        UPDATE_RESULT2=$?
+      elif command -v python >/dev/null 2>&1; then
+        python "$UPDATE_SCRIPT"
+        UPDATE_RESULT2=$?
+      else
+        echo "未找到 python，无法执行更新脚本"
+        UPDATE_RESULT2=254
+      fi
+      if [ "$UPDATE_RESULT2" -eq 0 ]; then
+        echo "更新脚本执行成功（exit=$UPDATE_RESULT2）"
+      else
+        echo "警告：更新脚本执行失败（exit=$UPDATE_RESULT2）"
+      fi
+
+      echo "重新启动录播姬..."
+      /root/BililiveRecorder/BililiveRecorder.Cli run --bind "http://*:2356" --http-basic-user "$Bililive_USER" --http-basic-pass "$Bililive_PASS" "/rec/录播姬" > /dev/null 2>&1 &
+      sleep 4
+      if pgrep -f "BililiveRecorder.Cli" > /dev/null; then
+        echo "录播姬重启成功"
+      else
+        echo "录播姬重启失败"
+      fi
+    fi
+  else
+    echo "更新脚本检测异常（exit=$UPDATE_RESULT），保持当前录播姬进程不改动。"
+  fi
 fi
 
 # 启动 biliup(暂时不使用biliup录制，只用于上传)
