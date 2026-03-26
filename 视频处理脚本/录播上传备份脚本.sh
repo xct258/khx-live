@@ -527,7 +527,7 @@ if [[ "$ENABLE_CLEANUP" == "true" ]]; then
 
   done < <(
     find "${source_backup}/videos" -type d \
-      \( -path "*/压制版/*" -o -path "*/源文件/*" \) \
+      \( -path "*/压制版/*" -o -path "*/原文件/*" \) \
       -name "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"
   )
 
