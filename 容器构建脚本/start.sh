@@ -270,7 +270,8 @@ while true; do
   now_ts=$(date +%s)
   target_time="${current_date} ${SCHEDULE_SLEEP_TIME:-$DEFAULT_SLEEP_TIME}"
   time_difference=$(( $(date -d "$target_time" +%s) - $now_ts ))
-  if [[ $time_difference -lt 0 ]]; then
+  # 当 time_difference 为 0 或负值时，表示已经到达或错过预定执行时间，需要设为次日同一时间
+  if [[ $time_difference -le 0 ]]; then
     time_difference=$(( time_difference + 86400 ))  # 加一天
   fi
   wake_time=$(date -d "@$(( $now_ts + $time_difference ))" '+%Y-%m-%d %H:%M:%S')
