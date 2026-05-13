@@ -95,7 +95,7 @@ def main():
 
     # 确保 FileNameRecordTemplate 存在
     if not isinstance(g.get("FileNameRecordTemplate"), dict) or not g.get("FileNameRecordTemplate", {}).get("Value"):
-        g["FileNameRecordTemplate"] = {"HasValue": True, "Value": "video/{{ name}}/{{ \"now\" | time_zone: \"Asia/Shanghai\" | format_date: \"yyy-MM-dd\" }}/{{ \"now\" | time_zone: \"Asia/Shanghai\" | format_date: \"录播姬_yyy年MM月dd日HH点mm分\" }}_{{ title }}_{{ name}}.flv"}
+        g["FileNameRecordTemplate"] = {"HasValue": True, "Value": "video/{{ name}}/{{ \"now\" | time_zone: \"Asia/Shanghai\" | format_date: \"yyy-MM-dd\" }}/{{ \"now\" | time_zone: \"Asia/Shanghai\" | format_date: \"录播姬_yyy年MM月dd日HH点mm分ss秒\" }}_{{ title }}_{{ name}}.flv"}
 
     # 确保 rooms 存在并包含默认项
     rooms = cfg_data.get("rooms")

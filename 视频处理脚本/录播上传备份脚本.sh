@@ -109,7 +109,7 @@ else
 
     # 获取第一个有效文件的信息，用于提取直播开始时间和主播名称
     first_file="${input_files[0]}"
-    # 示例：录播姬_2024年12月01日22点13分_暗区最穷_高机动持盾军官.flv
+    # 示例：录播姬_2024年12月01日22点13分11秒_暗区最穷_高机动持盾军官.flv
     base_filename=$(basename "$first_file")
 
     # 获取开播时间
@@ -203,22 +203,22 @@ else
     mapfile -d '' -t input_files < <(find "$cache_dir" -type f -print0 | sort -z)
     # 获取临时目录第一个文件的信息，用于提取直播开始时间和主播名称
     first_file="${input_files[0]}"
-    # 示例：video/高机动持盾军官/录播姬_2024年12月01日22点13分_暗区最穷_高机动持盾军官.flv
+    # 示例：video/高机动持盾军官/录播姬_2024年12月01日22点13分11秒_暗区最穷_高机动持盾军官.flv
     # 去除文件路径
     base_filename=$(basename "$first_file")
-    # 示例：录播姬_2024年12月01日22点13分_暗区最穷_高机动持盾军官.flv
+    # 示例：录播姬_2024年12月01日22点13分11秒_暗区最穷_高机动持盾军官.flv
 
     # 获取开播时间
     start_time=$(echo "$base_filename" | cut -d '_' -f 2 | cut -d '.' -f 1)
-    # 示例：2024年12月01日22点13分
+    # 示例：2024年12月01日22点13分11秒
     # 处理开播时间格式
-    formatted_start_time_1=$(echo "$start_time" | sed 's/^\(.*点\)[0-9]\+分$/\1/')
+    formatted_start_time_1=$(echo "$start_time" | sed 's/^\(.*点\).*/\1/')
     # 示例：2024年12月01日22点
     formatted_start_time_2=$(echo "$start_time" | sed 's/日/日 /')
-    # 示例：2024年12月01日 22点13分
-    formatted_start_time_3=$(echo "$start_time" | sed -E 's/([0-9]{4})年([0-9]{2})月([0-9]{2})日([0-9]{2})点([0-9]{2})分/\1\/\2\/\1-\2-\3/; s/日/日 /')
+    # 示例：2024年12月01日 22点13分11秒
+    formatted_start_time_3=$(echo "$start_time" | sed -E 's/([0-9]{4})年([0-9]{2})月([0-9]{2})日.*/\1\/\2\/\1-\2-\3/') 
     # 示例：2024/12/2024-12-01
-    formatted_start_time_4=$(echo "$start_time" | sed -E 's/([0-9]+年[0-9]+月[0-9]+日).*/\1/')
+    formatted_start_time_4=$(echo "$start_time" | sed 's/日.*/日/')
     # 示例：2024年12月01日
 
     # 获取直播间标题
@@ -259,11 +259,11 @@ else
       if [[ -f "$video_file" ]]; then
         # 获取文件名（不带路径）
         filename=$(basename "$video_file")
-        # 示例：录播姬_2024年12月01日22点13分_暗区最穷_高机动持盾军官.flv
+        # 示例：录播姬_2024年12月01日22点13分11秒_暗区最穷_高机动持盾军官.flv
 
         # 获取文件名（不带扩展名）
         filename_no_ext="${filename%.*}"
-        # 示例：录播姬_2024年12月01日22点13分_暗区最穷_高机动持盾军官
+        # 示例：录播姬_2024年12月01日22点13分11秒_暗区最穷_高机动持盾军官
 
         if [[ "$streamer_name" == "括弧笑bilibili" && " ${update_servers[*]} " == *" $recording_platform "* ]]; then
           ext="${filename##*.}"
