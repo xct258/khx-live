@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper 稳定版转写看板</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 40px; color: #333; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        h1 { text-align: center; color: #2c3e50; }
+        .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
+        input[type="text"] { flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; outline: none; }
+        button { padding: 12px 24px; background: #3498db; color: #fff; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
+        button:hover { background: #2980b9; }
+        button:disabled { background: #95a5a6; cursor: not-allowed; }
+        .status { padding: 15px; border-radius: 6px; margin-bottom: 20px; font-weight: bold; background: #ecf0f1; text-align: center; transition: background 0.3s;}
+        .output-box { height: 400px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 6px; font-family: 'Courier New', monospace; line-height: 1.6; }
+        .line { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #333; }
+        .time { color: #569cd6; margin-right: 15px; }
+        .text { color: #ce9178; }
+        .success { color: #2ecc71; margin-top: 20px; text-align: center; }
+        .header-controls { display: flex; justify-content: space-between; align-items: center; }
+        .clear-btn { background: #e74c3c; padding: 8px 15px; font-size: 14px; }
+        .clear-btn:hover { background: #c0392b; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header-controls">
+        <h1>🎙️ Whisper 转写看板</h1>
+        <button class="clear-btn" onclick="clearTask()">清除当前任务</button>
+    </div>
+    
+    <div class="input-group">
+        <input type="text" id="audioPath" placeholder="请输入或粘贴本地音频绝对路径 (例如: D:\record.mp3)">
+        <button id="startBtn" onclick="submitTask()">提交任务</button>
+    </div>
+
+    <div class="status" id="statusText">当前无任务。请提交音频路径。</div>
+    <div class="output-box" id="outputBox"></div>
+</div>
+
+<script>
+    let pollInterval = null;
+
+    // 格式化秒数为时分秒
+    function formatTime(seconds) {
+        return new Date(seconds * 1000).toISOString().substr(11, 8);
+    }
+
+    // 页面加载时，检查是否有未完成的任务
+    window.onload = () => {
+        const activeTaskId = localStorage.getItem('whisper_task_id');
+        if (activeTaskId) {
+            startPolling(activeTaskId);
+        }
+    };
+
+    // 1. 提交新任务
+    async function submitTask() {
+        const audioPath = document.getElementById('audioPath').value.trim();
+        if (!audioPath) return alert('请输入音频路径！');
+
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('outputBox').innerHTML = '';
+        updateStatus('正在向服务器提交任务...', '#f39c12');
+
+        try {
+            const response = await fetch('/submit_task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ audio_path: audioPath })
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail);
+            }
+
+            const data = await response.json();
+            // 【关键】将任务 ID 存入浏览器
+            localStorage.setItem('whisper_task_id', data.task_id);
+            startPolling(data.task_id);
+
+        } catch (error) {
+            updateStatus(`❌ 提交失败: ${error.message}`, '#e74c3c');
+            document.getElementById('startBtn').disabled = false;
+        }
+    }
+
+    // 2. 开始轮询状态
+    function startPolling(taskId) {
+        document.getElementById('startBtn').disabled = true;
+        
+        // 如果已经有定时器，先清除
+        if (pollInterval) clearInterval(pollInterval);
+
+        // 每 1.5 秒请求一次最新状态
+        pollInterval = setInterval(async () => {
+            try {
+                const response = await fetch(`/task_status/${taskId}`);
+                if (!response.ok) {
+                    throw new Error("任务已丢失或服务器重启");
+                }
+                const taskData = await response.json();
+                renderUI(taskData);
+
+                // 如果任务完成或出错，停止轮询
+                if (taskData.status === 'done' || taskData.status === 'error') {
+                    clearInterval(pollInterval);
+                    document.getElementById('startBtn').disabled = false;
+                    localStorage.removeItem('whisper_task_id'); // 跑完清除记忆
+                }
+            } catch (error) {
+                clearInterval(pollInterval);
+                updateStatus(`❌ 连接中断: ${error.message}`, '#e74c3c');
+                document.getElementById('startBtn').disabled = false;
+                localStorage.removeItem('whisper_task_id');
+            }
+        }, 1500);
+    }
+
+    // 3. 渲染界面
+    function renderUI(taskData) {
+        const outputBox = document.getElementById('outputBox');
+        
+        // 更新顶部状态栏
+        if (taskData.status === 'queued') {
+            updateStatus('⏳ 任务排队中 / 正在进行静音扫描，请稍候...', '#f39c12');
+        } else if (taskData.status === 'running') {
+            updateStatus('🚀 正在全速转写中...', '#3498db');
+        } else if (taskData.status === 'done') {
+            updateStatus(`✅ 转写完成！耗时: ${taskData.result.time_cost} 秒`, '#2ecc71');
+        } else if (taskData.status === 'error') {
+            updateStatus(`❌ 发生错误: ${taskData.error_msg}`, '#e74c3c');
+        }
+
+        // 重新渲染所有的字幕（这样即使刷新网页，也能一次性加载之前跑出的字幕）
+        let html = '';
+        taskData.segments.forEach(seg => {
+            html += `<div class="line">
+                <span class="time">[${formatTime(seg.start)} -> ${formatTime(seg.end)}]</span>
+                <span class="text">${seg.text}</span>
+            </div>`;
+        });
+
+        // 如果完成了，在末尾追加文件路径信息
+        if (taskData.status === 'done' && taskData.result) {
+            html += `<div class="success">文件已保存至：<br>TXT: ${taskData.result.txt_file}<br>SRT: ${taskData.result.srt_file}</div>`;
+        }
+
+        // 只有当内容发生变化时才更新 DOM，避免画面闪烁
+        if (outputBox.innerHTML !== html) {
+            outputBox.innerHTML = html;
+            outputBox.scrollTop = outputBox.scrollHeight; // 滚动到底部
+        }
+    }
+
+    function updateStatus(text, color) {
+        const el = document.getElementById('statusText');
+        el.innerText = text;
+        el.style.background = color;
+        el.style.color = '#fff';
+    }
+
+    // 4. 手动清除任务状态
+    function clearTask() {
+        if(pollInterval) clearInterval(pollInterval);
+        localStorage.removeItem('whisper_task_id');
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('outputBox').innerHTML = '';
+        updateStatus('状态已重置，可提交新任务。', '#ecf0f1');
+        document.getElementById('statusText').style.color = '#333';
+    }
+</script>
+
+</body>
+</html>
