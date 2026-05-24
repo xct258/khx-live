@@ -222,6 +222,7 @@
             flex-direction: column;
             z-index: 200;
             overflow: hidden;
+            will-change: transform, opacity;
             transform: translate(-50%, -46%) scale(0.95);
             opacity: 0;
             pointer-events: none;
@@ -252,7 +253,8 @@
         .list-item.running { background: rgba(59, 130, 246, 0.05); border-color: rgba(59, 130, 246, 0.15); }
         
         .item-info { flex: 1; min-width: 0; margin-right: 1rem; }
-        .item-name { font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main); font-weight: 500; }
+        .item-name { font-size: 0.85rem; white-space: nowrap; overflow: hidden; color: var(--text-main); font-weight: 500; }
+        .item-time { font-size: 0.75rem; color: rgba(255,255,255,0.35); margin-top: 2px; }
         .item-status { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.3rem; display: flex; gap: 0.5rem; align-items: center; }
         
         .btn-kill { 
@@ -338,21 +340,6 @@
         .nav-btn:active { background: rgba(255, 255, 255, 0.06); }
         .btn-kill:active { background: var(--danger); color: white; opacity: 0.9; }
         .btn-view:active { background: var(--primary); color: white; opacity: 0.9; }
-
-        /* ================= 中等屏幕：双行布局 ================= */
-        @media (max-width: 900px) {
-            .app-header {
-                height: auto;
-                min-height: 52px;
-                padding: 0.4rem 1rem;
-                flex-wrap: wrap;
-                row-gap: 0.4rem;
-            }
-            .header-left { flex: 0 0 100%; justify-content: center; gap: 0.75rem; }
-            .header-title { font-size: 0.85rem; }
-            .header-actions { flex: 0 0 100%; justify-content: center; gap: 0.5rem; }
-            .nav-btn { padding: 0.35rem 0.5rem; font-size: 0.78rem; }
-        }
 
         /* ================= 移动端和响应式媒体查询 ================= */
         @media (max-width: 768px) {
@@ -495,6 +482,7 @@
         let pollInterval = null;      
         let queueInterval = null;     
         let currentTaskId = null;     
+        let currentFilename = '';
         let lastSegmentCount = 0;
 
         const escapeHTML = (str) => {
@@ -584,6 +572,9 @@
                 } else {
                     fetchQueueAndHistory();
                     queueInterval = setInterval(fetchQueueAndHistory, 2000);
+                    if (currentTaskId && !pollInterval) {
+                        pollInterval = setInterval(checkMyTaskStatus, 1000);
+                    }
                 }
             });
 
@@ -712,10 +703,12 @@
                 
                 const safeFilename = escapeHTML(item.filename);
                 const hasFile = item.status === 'done' && item.txt_file;
+                const timeStr = item.created_at ? new Date(item.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
                 htmlStr += `
                     <div class="list-item">
                         <div class="item-info" style="margin-right:0;">
                             <div class="item-name" title="${safeFilename}">${safeFilename}</div>
+                            <div class="item-time">${timeStr}</div>
                             <div class="item-status">${statusStr}</div>
                         </div>
                         ${hasFile ? `<button class="btn-view" data-task-id="${item.task_id}">查看</button>` : ''}
@@ -735,6 +728,7 @@
         // ================= 日志与进程交互 =================
         function switchTerminal(taskId, filename) {
             currentTaskId = taskId;
+            currentFilename = filename;
             lastSegmentCount = 0;
             const consoleOutput = document.getElementById('consoleOutput');
             
@@ -788,7 +782,7 @@
                     }
                     if (finalHtml) output.innerHTML = finalHtml;
                     lastSegmentCount = data.segments ? data.segments.length : 0;
-                    document.getElementById('toolbarStatus').innerHTML = `✅ 任务完成，共耗时 ${data.result.time_cost} 秒`;
+                    document.getElementById('toolbarStatus').innerHTML = `✅ "${escapeHTML(currentFilename)}" 完成，耗时 ${data.result.time_cost} 秒`;
                     showToast('当前任务已转写完成', 'success');
                 } else if (data.status === 'error') {
                     if(pollInterval) clearInterval(pollInterval);
@@ -808,7 +802,7 @@
                         errOutput.innerHTML = finalHtml;
                         lastSegmentCount = data.segments.length;
                     }
-                    document.getElementById('toolbarStatus').innerHTML = `❌ 发生异常：${escapeHTML(data.error_msg)}`;
+                    document.getElementById('toolbarStatus').innerHTML = `❌ "${escapeHTML(currentFilename)}" 异常：${escapeHTML(data.error_msg)}`;
                     showToast('转写任务发生异常而终止', 'error');
                 } else if (data.status === 'cancelled') {
                     if(pollInterval) clearInterval(pollInterval);
@@ -822,7 +816,7 @@
             
             // 首次收到识别内容时更新状态
             if (lastSegmentCount === 0 && segments.length > 0) {
-                document.getElementById('toolbarStatus').innerHTML = '🎤 正在转写中...';
+                document.getElementById('toolbarStatus').innerHTML = `🎤 正在转写 "${escapeHTML(currentFilename)}"...`;
             }
             
             const consoleOutput = document.getElementById('consoleOutput');
@@ -881,147 +875,5 @@
             document.getElementById('viewerOverlay').classList.remove('show');
         }
     </script>
-</body>
-</html>        <button id="startBtn" onclick="submitTask()">提交任务</button>
-    </div>
-
-    <div class="status" id="statusText">当前无任务。请提交音频路径。</div>
-    <div class="output-box" id="outputBox"></div>
-</div>
-
-<script>
-    let pollInterval = null;
-
-    // 格式化秒数为时分秒
-    function formatTime(seconds) {
-        return new Date(seconds * 1000).toISOString().substr(11, 8);
-    }
-
-    // 页面加载时，检查是否有未完成的任务
-    window.onload = () => {
-        const activeTaskId = localStorage.getItem('whisper_task_id');
-        if (activeTaskId) {
-            startPolling(activeTaskId);
-        }
-    };
-
-    // 1. 提交新任务
-    async function submitTask() {
-        const audioPath = document.getElementById('audioPath').value.trim();
-        if (!audioPath) return alert('请输入音频路径！');
-
-        document.getElementById('startBtn').disabled = true;
-        document.getElementById('outputBox').innerHTML = '';
-        updateStatus('正在向服务器提交任务...', '#f39c12');
-
-        try {
-            const response = await fetch('/submit_task', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ audio_path: audioPath })
-            });
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail);
-            }
-
-            const data = await response.json();
-            // 【关键】将任务 ID 存入浏览器
-            localStorage.setItem('whisper_task_id', data.task_id);
-            startPolling(data.task_id);
-
-        } catch (error) {
-            updateStatus(`❌ 提交失败: ${error.message}`, '#e74c3c');
-            document.getElementById('startBtn').disabled = false;
-        }
-    }
-
-    // 2. 开始轮询状态
-    function startPolling(taskId) {
-        document.getElementById('startBtn').disabled = true;
-        
-        // 如果已经有定时器，先清除
-        if (pollInterval) clearInterval(pollInterval);
-
-        // 每 1.5 秒请求一次最新状态
-        pollInterval = setInterval(async () => {
-            try {
-                const response = await fetch(`/task_status/${taskId}`);
-                if (!response.ok) {
-                    throw new Error("任务已丢失或服务器重启");
-                }
-                const taskData = await response.json();
-                renderUI(taskData);
-
-                // 如果任务完成或出错，停止轮询
-                if (taskData.status === 'done' || taskData.status === 'error') {
-                    clearInterval(pollInterval);
-                    document.getElementById('startBtn').disabled = false;
-                    localStorage.removeItem('whisper_task_id'); // 跑完清除记忆
-                }
-            } catch (error) {
-                clearInterval(pollInterval);
-                updateStatus(`❌ 连接中断: ${error.message}`, '#e74c3c');
-                document.getElementById('startBtn').disabled = false;
-                localStorage.removeItem('whisper_task_id');
-            }
-        }, 1500);
-    }
-
-    // 3. 渲染界面
-    function renderUI(taskData) {
-        const outputBox = document.getElementById('outputBox');
-        
-        // 更新顶部状态栏
-        if (taskData.status === 'queued') {
-            updateStatus('⏳ 任务排队中 / 正在进行静音扫描，请稍候...', '#f39c12');
-        } else if (taskData.status === 'running') {
-            updateStatus('🚀 正在全速转写中...', '#3498db');
-        } else if (taskData.status === 'done') {
-            updateStatus(`✅ 转写完成！耗时: ${taskData.result.time_cost} 秒`, '#2ecc71');
-        } else if (taskData.status === 'error') {
-            updateStatus(`❌ 发生错误: ${taskData.error_msg}`, '#e74c3c');
-        }
-
-        // 重新渲染所有的字幕（这样即使刷新网页，也能一次性加载之前跑出的字幕）
-        let html = '';
-        taskData.segments.forEach(seg => {
-            html += `<div class="line">
-                <span class="time">[${formatTime(seg.start)} -> ${formatTime(seg.end)}]</span>
-                <span class="text">${seg.text}</span>
-            </div>`;
-        });
-
-        // 如果完成了，在末尾追加文件路径信息
-        if (taskData.status === 'done' && taskData.result) {
-            html += `<div class="success">文件已保存至：<br>TXT: ${taskData.result.txt_file}<br>SRT: ${taskData.result.srt_file}</div>`;
-        }
-
-        // 只有当内容发生变化时才更新 DOM，避免画面闪烁
-        if (outputBox.innerHTML !== html) {
-            outputBox.innerHTML = html;
-            outputBox.scrollTop = outputBox.scrollHeight; // 滚动到底部
-        }
-    }
-
-    function updateStatus(text, color) {
-        const el = document.getElementById('statusText');
-        el.innerText = text;
-        el.style.background = color;
-        el.style.color = '#fff';
-    }
-
-    // 4. 手动清除任务状态
-    function clearTask() {
-        if(pollInterval) clearInterval(pollInterval);
-        localStorage.removeItem('whisper_task_id');
-        document.getElementById('startBtn').disabled = false;
-        document.getElementById('outputBox').innerHTML = '';
-        updateStatus('状态已重置，可提交新任务。', '#ecf0f1');
-        document.getElementById('statusText').style.color = '#333';
-    }
-</script>
-
 </body>
 </html>
