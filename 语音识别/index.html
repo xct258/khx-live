@@ -2,39 +2,887 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Whisper 稳定版转写看板</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Whisper 智能转写控制台</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 40px; color: #333; }
-        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
-        h1 { text-align: center; color: #2c3e50; }
-        .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
-        input[type="text"] { flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; outline: none; }
-        button { padding: 12px 24px; background: #3498db; color: #fff; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
-        button:hover { background: #2980b9; }
-        button:disabled { background: #95a5a6; cursor: not-allowed; }
-        .status { padding: 15px; border-radius: 6px; margin-bottom: 20px; font-weight: bold; background: #ecf0f1; text-align: center; transition: background 0.3s;}
-        .output-box { height: 400px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 6px; font-family: 'Courier New', monospace; line-height: 1.6; }
-        .line { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #333; }
-        .time { color: #569cd6; margin-right: 15px; }
-        .text { color: #ce9178; }
-        .success { color: #2ecc71; margin-top: 20px; text-align: center; }
-        .header-controls { display: flex; justify-content: space-between; align-items: center; }
-        .clear-btn { background: #e74c3c; padding: 8px 15px; font-size: 14px; }
-        .clear-btn:hover { background: #c0392b; }
+        :root {
+            /* 现代暗色系配色 (基于 Tailwind Slate 系列) */
+            --bg-body: #0b0f19;       /* 极富科技感的暗海蓝色背景 */
+            --bg-header: rgba(15, 23, 42, 0.85); /* 顶栏半透明 */
+            --bg-panel: rgba(30, 41, 59, 0.95);  /* 浮窗背景 */
+            --bg-input: #1e293b;
+            
+            --border-color: #1e293b;
+            --border-hover: #334155;
+            --border-active: #475569;
+            
+            --text-main: #f8fafc;
+            --text-muted: #64748b;
+            --text-secondary: #94a3b8;
+            
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --danger: #ef4444;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --time-color: #38bdf8;
+            
+            /* UI 使用现代无衬线字体，代码/日志保留等宽 */
+            --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            --font-mono: "JetBrains Mono", "SF Mono", Consolas, Menlo, Monaco, monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--font-ui);
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            height: 100vh;
+            user-select: none; -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            height: 100dvh; /* 支持移动端动态视口高度 */
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* ================= 现代毛玻璃顶栏 ================= */
+        .app-header {
+            background-color: var(--bg-header);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            height: 56px;
+            display: flex;
+            align-items: center;
+            padding: 0 1.5rem;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 50;
+            gap: 0.75rem;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 0; overflow: hidden; }
+        
+        .header-title { 
+            font-size: 0.95rem; font-weight: 600; color: #f1f5f9; 
+            display: flex; align-items: center; gap: 0.5rem; user-select: none; letter-spacing: 0.5px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+
+        /* 精细的状态徽章 */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.15rem 0.55rem;
+            border-radius: 9999px;
+            margin-left: 6px;
+            user-select: none;
+            flex-shrink: 0;
+            transition: all 0.2s ease;
+        }
+        .badge-idle {
+            background: rgba(16, 185, 129, 0.08);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.15);
+        }
+        .badge-running {
+            background: rgba(59, 130, 246, 0.08);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.15);
+        }
+        
+        /* 脉冲状态圆点 */
+        .pulse-dot-green, .pulse-dot-blue {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            position: relative;
+        }
+        .pulse-dot-green { background-color: var(--success); }
+        .pulse-dot-blue { background-color: var(--primary); }
+
+        .pulse-dot-green::after, .pulse-dot-blue::after {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            animation: pulse 2.2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+            left: 0;
+            top: 0;
+        }
+        .pulse-dot-green::after { background-color: var(--success); }
+        .pulse-dot-blue::after { background-color: var(--primary); }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(3); opacity: 0; }
+        }
+
+        /* ================= 操作工具栏 ================= */
+        .header-actions { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; }
+
+        /* 面板切换按钮 */
+        .nav-btn {
+            background: transparent; border: 1px solid transparent; color: var(--text-secondary);
+            padding: 0.4rem 0.85rem; border-radius: 6px; font-family: var(--font-ui); font-size: 0.85rem;
+            cursor: pointer; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); display: flex; align-items: center; gap: 0.4rem; font-weight: 500;
+            position: relative;
+        }
+        .nav-btn.active {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+        
+        .badge { background: var(--primary); color: white; padding: 0.1rem 0.45rem; border-radius: 12px; font-size: 0.65rem; font-weight: 700; line-height: 1;}
+
+        /* ================= 极客风格终端工具栏 ================= */
+        .console-toolbar {
+            background: rgba(15, 23, 42, 0.4);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-muted);
+            font-style: italic;
+            font-size: 0.75rem;
+        }
+        .toolbar-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* ================= 实时日志内容区 ================= */
+        .log-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem 2rem;
+            font-size: 0.9rem;
+            line-height: 1.7;
+            scroll-behavior: smooth;
+            -webkit-overflow-scrolling: touch;
+        }
+        .log-container::-webkit-scrollbar,
+        .panel-body::-webkit-scrollbar { width: 6px; }
+        .log-container::-webkit-scrollbar-track,
+        .panel-body::-webkit-scrollbar-track { background: transparent; }
+        .log-container::-webkit-scrollbar-thumb,
+        .panel-body::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+        .segment { display: flex; gap: 1rem; margin-bottom: 0.5rem; padding: 0.25rem 0.5rem; border-radius: 6px; transition: background-color 0.15s; }
+        .segment:hover { background-color: rgba(255, 255, 255, 0.02); }
+        .segment-time { color: var(--time-color); user-select: none; flex-shrink: 0; font-family: var(--font-mono); font-size: 0.85rem; }
+        .segment-text { color: var(--text-main); word-break: break-all; }
+
+        /* ================= 居中弹窗面板 (桌面端 & 移动端统一) ================= */
+        .overlay-panel {
+            position: fixed;
+            top: 50%; left: 50%; right: auto; bottom: auto;
+            width: auto; min-width: 320px; max-width: min(600px, 90vw); max-height: 70vh;
+            background: var(--bg-panel);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            z-index: 200;
+            overflow: hidden;
+            transform: translate(-50%, -46%) scale(0.95);
+            opacity: 0;
+            pointer-events: none;
+            transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
+        }
+        .overlay-panel.show {
+            transform: translate(-50%, -50%) scale(1);
+            opacity: 1;
+            pointer-events: auto;
+        }
+        
+        .panel-header { 
+            padding: 1rem 1.25rem; border-bottom: 1px solid rgba(255, 255, 255, 0.05); 
+            font-size: 0.9rem; font-weight: 600; color: var(--text-main); background: rgba(255,255,255,0.01);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .panel-close-btn {
+            background: transparent; border: none; color: var(--text-muted);
+            font-size: 1.5rem; cursor: pointer; line-height: 1; transition: color 0.2s;
+        }
+        .panel-body { overflow-y: auto; padding: 0.5rem; flex: 1; -webkit-overflow-scrolling: touch; }
+        
+        .list-item { 
+            display: flex; justify-content: space-between; align-items: center; 
+            padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 0.25rem; 
+            background: transparent; border: 1px solid transparent; transition: all 0.2s;
+        }
+        .list-item.running { background: rgba(59, 130, 246, 0.05); border-color: rgba(59, 130, 246, 0.15); }
+        
+        .item-info { flex: 1; min-width: 0; margin-right: 1rem; }
+        .item-name { font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main); font-weight: 500; }
+        .item-status { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.3rem; display: flex; gap: 0.5rem; align-items: center; }
+        
+        .btn-kill { 
+            background: rgba(239, 68, 68, 0.1); border: none; color: var(--danger); 
+            padding: 0.35rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600; transition: all 0.2s;
+        }
+
+        .empty-state { text-align: center; color: var(--text-muted); padding: 3rem 0; font-size: 0.85rem; font-style: italic; }
+
+        /* ================= 文件查看器模态框 ================= */
+        .viewer-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 200; opacity: 0; pointer-events: none;
+            transition: opacity 0.25s ease;
+            backdrop-filter: blur(4px);
+        }
+        .viewer-overlay.show { opacity: 1; pointer-events: auto; }
+        .viewer-modal {
+            background: var(--bg-panel); border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px; width: 680px; max-width: 90vw;
+            max-height: 80vh; display: flex; flex-direction: column;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
+            transform: scale(0.95);
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .viewer-overlay.show .viewer-modal {
+            transform: scale(1);
+        }
+        .viewer-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 1rem 1.25rem; border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.9rem; font-weight: 600;
+        }
+        .viewer-close {
+            background: transparent; border: none; color: var(--text-muted);
+            font-size: 1.5rem; cursor: pointer; padding: 0 0.25rem;
+            line-height: 1; transition: color 0.2s;
+        }
+        .viewer-body {
+            padding: 1.25rem; overflow-y: auto; flex: 1;
+            font-family: var(--font-mono); font-size: 0.85rem;
+            line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+            -webkit-overflow-scrolling: touch;
+            color: #e2e8f0;
+        }
+        .viewer-body::-webkit-scrollbar { width: 6px; }
+        .viewer-body::-webkit-scrollbar-track { background: transparent; }
+        .viewer-body::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .viewer-body::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .btn-view {
+            background: rgba(59, 130, 246, 0.1); border: none; color: var(--primary);
+            padding: 0.3rem 0.65rem; border-radius: 6px; cursor: pointer;
+            font-size: 0.75rem; font-weight: 600; transition: all 0.2s;
+        }
+
+        /* 自定义轻量吐司组件 */
+        .toast-container {
+            position: fixed; bottom: 24px; right: 24px; z-index: 300;
+            display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+        }
+        .toast {
+            background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08); color: var(--text-main);
+            padding: 0.65rem 1.1rem; border-radius: 8px; font-size: 0.8rem; font-weight: 600;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+            display: flex; align-items: center; gap: 6px;
+            transform: translateY(20px); opacity: 0;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .toast.show { transform: translateY(0); opacity: 1; }
+
+        /* ================= 触控反馈和悬浮优化 ================= */
+        @media (hover: hover) {
+            .nav-btn:hover { background: rgba(255, 255, 255, 0.03); color: var(--text-main); }
+            .list-item:hover { background: rgba(255,255,255,0.02); border-color: rgba(255,255,255,0.04); }
+            .btn-kill:hover { background: var(--danger); color: white; }
+            .viewer-close:hover { color: var(--text-main); }
+            .btn-view:hover { background: var(--primary); color: white; }
+            ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        }
+
+        .nav-btn:active { background: rgba(255, 255, 255, 0.06); }
+        .btn-kill:active { background: var(--danger); color: white; opacity: 0.9; }
+        .btn-view:active { background: var(--primary); color: white; opacity: 0.9; }
+
+        /* ================= 中等屏幕：双行布局 ================= */
+        @media (max-width: 900px) {
+            .app-header {
+                height: auto;
+                min-height: 52px;
+                padding: 0.4rem 1rem;
+                flex-wrap: wrap;
+                row-gap: 0.4rem;
+            }
+            .header-left { flex: 0 0 100%; justify-content: center; gap: 0.75rem; }
+            .header-title { font-size: 0.85rem; }
+            .header-actions { flex: 0 0 100%; justify-content: center; gap: 0.5rem; }
+            .nav-btn { padding: 0.35rem 0.5rem; font-size: 0.78rem; }
+        }
+
+        /* ================= 移动端和响应式媒体查询 ================= */
+        @media (max-width: 768px) {
+            body { padding-bottom: 0; }
+            
+            /* 1. 顶栏自适应（回到单行） */
+            .app-header {
+                height: 52px;
+                min-height: 0;
+                flex-wrap: nowrap;
+                padding: 0 1rem;
+                row-gap: 0;
+            }
+            .header-left { flex: 1; justify-content: flex-start; }
+            .header-title { font-size: 0.9rem; }
+            .status-badge { font-size: 0.7rem; padding: 0.1rem 0.4rem; margin-left: 2px; }
+
+            /* 2. 移动端 - 任务提交按钮正常显示在操作栏 */
+            
+            /* 3. 顶栏操作组（回到单行右侧） */
+            .header-actions { flex: 0 0 auto; gap: 0.5rem; }
+            
+            /* 4. 面板基础样式由共用区统一提供，移动端只微调宽高比 */
+            .overlay-panel { max-width: min(420px, 90vw); max-height: 75vh; }
+            .panel-header { padding: 0.9rem 1.25rem; display: flex; justify-content: space-between; align-items: center; }
+
+            /* 5. 元素微调 */
+            .list-item { padding: 0.6rem 0.75rem; }
+            .item-name { font-size: 0.8rem; }
+            .item-status { font-size: 0.72rem; }
+            .btn-kill, .btn-view { padding: 0.3rem 0.6rem; font-size: 0.72rem; }
+
+            /* 6. 日志流自适应 */
+            .log-container { padding: 1rem; font-size: 0.82rem; line-height: 1.6; }
+            .segment { gap: 0.5rem; margin-bottom: 0.3rem; padding: 0.2rem 0.4rem; flex-wrap: wrap; }
+            .segment-time { font-size: 0.75rem; }
+            .segment-text { flex: 1 1 100%; }
+            /* 7. 查看器微调 */
+            .viewer-modal { width: 95vw; max-height: 85vh; }
+            .viewer-header { padding: 0.75rem 1rem; }
+            .viewer-body { padding: 1rem; font-size: 0.78rem; }
+        }
+
+        /* 极窄设备自适应 */
+        @media (max-width: 640px) {
+            .header-title { font-size: 0.78rem; }
+            .status-badge { font-size: 0.6rem; padding: 0.05rem 0.25rem; margin-left: 0; }
+            .nav-btn { padding: 0.35rem 0.4rem; min-width: 36px; justify-content: center; }
+            .nav-btn .btn-text { display: none; }
+            .nav-btn .btn-icon { margin: 0; width: 16px; height: 16px; display: block !important; }
+            .nav-btn .badge { position: absolute; top: -3px; right: -3px; font-size: 0.6rem; padding: 0.1rem 0.25rem; box-shadow: 0 0 0 2px var(--bg-header); }
+            .console-toolbar { padding: 0 0.75rem; height: 36px; }
+            .toolbar-right { font-size: 0.6rem; }
+        }
+
+        /* 默认隐藏矢量图标 */
+        .nav-btn .btn-icon { display: none; }
     </style>
 </head>
-<body>
+<body oncontextmenu="return false" oncopy="return false" oncut="return false">
 
-<div class="container">
-    <div class="header-controls">
-        <h1>🎙️ Whisper 转写看板</h1>
-        <button class="clear-btn" onclick="clearTask()">清除当前任务</button>
+    <!-- 顶部导航栏 -->
+    <header class="app-header">
+        <div class="header-left">
+            <div class="header-title" id="globalStatusText">
+                Whisper 智能转写 <span class="status-badge badge-idle"><span class="pulse-dot-green"></span>服务就绪</span>
+            </div>
+        </div>
+
+        <div class="header-actions">
+            <button class="nav-btn" id="btnQueue" data-panel="queueModal" data-btn="btnQueue">
+                <!-- 预埋移动端矢量图标 -->
+                <svg class="btn-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h7"></path>
+                </svg>
+                <span class="btn-text">任务队列</span>
+                <span class="badge" id="queueCount">0</span>
+            </button>
+            <button class="nav-btn" id="btnHistory" data-panel="historyModal" data-btn="btnHistory">
+                <!-- 预埋移动端矢量图标 -->
+                <svg class="btn-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="btn-text">历史记录</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 极客风格控制台操作面板 -->
+    <section class="console-toolbar">
+        <div class="toolbar-left">
+            <button class="toolbar-btn" id="btnClearLogs" title="清空当前显示的控制台内容">
+                <span>🗑️ 清空面板</span>
+            </button>
+        </div>
+        <div class="toolbar-right" id="toolbarStatus">✨ 服务已就绪 · 8286</div>
+    </section>
+
+    <!-- 日志流主区域 -->
+    <main class="log-container" id="consoleOutput"></main>
+
+    <!-- 悬浮面板：任务队列 -->
+    <div id="queueModal" class="overlay-panel">
+        <div class="panel-header">
+            <span>当前执行与排队列表</span>
+            <button class="panel-close-btn" onclick="closeAllPanels()">&times;</button>
+        </div>
+        <div class="panel-body" id="queueContainer">
+            <div class="empty-state">当前暂无任务，频道空闲。</div>
+        </div>
     </div>
-    
-    <div class="input-group">
-        <input type="text" id="audioPath" placeholder="请输入或粘贴本地音频绝对路径 (例如: D:\record.mp3)">
-        <button id="startBtn" onclick="submitTask()">提交任务</button>
+
+    <!-- 悬浮面板：历史记录 -->
+    <div id="historyModal" class="overlay-panel">
+        <div class="panel-header">
+            <span>最近处理记录</span>
+            <button class="panel-close-btn" onclick="closeAllPanels()">&times;</button>
+        </div>
+        <div class="panel-body" id="historyContainer">
+            <div class="empty-state">暂无任何转写历史。</div>
+        </div>
+    </div>
+
+    <!-- 文件内容查看器模态框 -->
+    <div id="viewerOverlay" class="viewer-overlay" onclick="closeViewer(event)">
+        <div class="viewer-modal" onclick="event.stopPropagation()">
+            <div class="viewer-header">
+                <span id="viewerFilename">文件内容</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button class="viewer-close" onclick="closeViewer()">&times;</button>
+                </div>
+            </div>
+            <div class="viewer-body" id="viewerContent">加载中...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        const MAX_LOG_ITEMS = 500;
+        let pollInterval = null;      
+        let queueInterval = null;     
+        let currentTaskId = null;     
+        let lastSegmentCount = 0;
+
+        const escapeHTML = (str) => {
+            if (!str) return '';
+            return str.toString().replace(/[&<>'"]/g, tag => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+            }[tag] || tag));
+        };
+
+        function trimConsole() {
+            const el = document.getElementById('consoleOutput');
+            while (el.children.length > MAX_LOG_ITEMS) {
+                el.removeChild(el.firstChild);
+            }
+        }
+
+        // ================= 全局轻量 Toast 提示组件 =================
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer') || (() => {
+                const c = document.createElement('div');
+                c.id = 'toastContainer';
+                c.className = 'toast-container';
+                document.body.appendChild(c);
+                return c;
+            })();
+            
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            
+            let icon = 'ℹ️ ';
+            if (type === 'success') icon = '✨ ';
+            if (type === 'error') icon = '⚠️ ';
+            
+            toast.textContent = icon + message;
+            container.appendChild(toast);
+            
+            // 触发回流执行动画
+            toast.offsetHeight;
+            toast.classList.add('show');
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 2500);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchQueueAndHistory();
+            queueInterval = setInterval(fetchQueueAndHistory, 2000);
+
+            // 终端工具栏：清空面板
+            document.getElementById('btnClearLogs').addEventListener('click', () => {
+                document.getElementById('consoleOutput').innerHTML = '';
+                lastSegmentCount = 0;
+                showToast('已清空控制台内容', 'success');
+            });
+
+            // 事件委托：面板切换
+            document.querySelectorAll('.nav-btn[data-panel]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    togglePanel(btn.dataset.panel, btn.dataset.btn);
+                });
+            });
+
+            // 事件委托：取消任务（队列面板内的 .btn-kill）
+            document.getElementById('queueContainer').addEventListener('click', e => {
+                const btn = e.target.closest('.btn-kill');
+                if (!btn) return;
+                const listItem = btn.closest('[data-task-id]');
+                if (listItem) cancelAnyTask(listItem.dataset.taskId);
+            });
+
+            // 点击外部关闭浮窗（排除触发按钮本身）
+            document.addEventListener('click', e => {
+                if (!e.target.closest('.overlay-panel') && !e.target.closest('.nav-btn')) {
+                    closeAllPanels();
+                }
+            });
+
+            // 页面隐藏时暂停轮询，显示时恢复
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    if (queueInterval) clearInterval(queueInterval);
+                    if (pollInterval) clearInterval(pollInterval);
+                    queueInterval = null;
+                    pollInterval = null;
+                } else {
+                    fetchQueueAndHistory();
+                    queueInterval = setInterval(fetchQueueAndHistory, 2000);
+                }
+            });
+
+            // 页面卸载时清理定时器
+            window.addEventListener('beforeunload', () => {
+                if (queueInterval) clearInterval(queueInterval);
+                if (pollInterval) clearInterval(pollInterval);
+            });
+            
+            // 监听键盘 ESC 键关闭所有打开的面板、查看器
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape') {
+                    closeAllPanels();
+                    closeViewer();
+                }
+            });
+        });
+
+
+        // ================= 浮窗面板控制 =================
+        function togglePanel(panelId, btnId) {
+            const panel = document.getElementById(panelId);
+            const btn = document.getElementById(btnId);
+            const isShowing = panel.classList.contains('show');
+            
+            closeAllPanels(); 
+            
+            if (!isShowing) {
+                panel.classList.add('show');
+                btn.classList.add('active');
+            }
+        }
+
+        function closeAllPanels() {
+            document.querySelectorAll('.overlay-panel').forEach(p => p.classList.remove('show'));
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+        }
+
+        // ================= 数据与状态拉取 =================
+        async function fetchQueueAndHistory() {
+            try {
+                const [qRes, hRes] = await Promise.all([
+                    fetch(`${API_BASE}/queue_status`).catch(() => null),
+                    fetch(`${API_BASE}/task_history`).catch(() => null)
+                ]);
+
+                if (qRes && qRes.ok) {
+                    const qData = await qRes.json();
+                    renderQueue(qData.queue);
+                    
+                    document.getElementById('queueCount').innerText = qData.queue.length;
+                    const runningTask = qData.queue.find(t => t.status === 'running');
+                    const statusText = document.getElementById('globalStatusText');
+                    
+                    if (runningTask) {
+                        statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-running"><span class="pulse-dot-blue"></span>正在转写</span>`;
+                        // 发现新任务立即跟进
+                        if (runningTask.task_id !== currentTaskId) {
+                            switchTerminal(runningTask.task_id, runningTask.filename);
+                        }
+                    } else {
+                        statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-idle"><span class="pulse-dot-green"></span>服务就绪</span>`;
+                        if(currentTaskId && !pollInterval) currentTaskId = null;
+                    }
+                }
+
+                if (hRes && hRes.ok) {
+                    const hData = await hRes.json();
+                    renderHistory(hData.history);
+                }
+            } catch (e) {
+                console.warn('fetchQueueAndHistory 请求失败:', e);
+            }
+        }
+
+        // ================= 列表渲染逻辑 =================
+        let lastQueueHtml = '';
+
+        function renderQueue(queue) {
+            const container = document.getElementById('queueContainer');
+            if (!queue || queue.length === 0) {
+                const emptyHtml = '<div class="empty-state">当前暂无任务，频道空闲。</div>';
+                if (container.innerHTML !== emptyHtml) container.innerHTML = emptyHtml;
+                return;
+            }
+            
+            let htmlStr = '';
+            queue.forEach((item, index) => {
+                const isRunning = item.status === 'running';
+                const safeFilename = escapeHTML(item.filename);
+                const statusStr = isRunning 
+                    ? '<span class="status-running"><span class="spinner spinner-sm"></span> 提取中</span>' 
+                    : `<span>等待中 #${index}</span>`;
+                
+                htmlStr += `
+                    <div class="list-item ${isRunning ? 'running' : ''}" data-task-id="${item.task_id}">
+                        <div class="item-info">
+                            <div class="item-name" title="${safeFilename}">${safeFilename}</div>
+                            <div class="item-status">${statusStr} <span style="opacity:0.5">|</span> ID: ${item.task_id.substring(0,6)}</div>
+                        </div>
+                        <button class="btn-kill">中止</button>
+                    </div>`;
+            });
+            
+            if (htmlStr === lastQueueHtml) return;
+            lastQueueHtml = htmlStr;
+            container.innerHTML = htmlStr;
+        }
+
+        let lastHistoryHtml = '';
+
+        function renderHistory(history) {
+            const container = document.getElementById('historyContainer');
+            if (!history || history.length === 0) {
+                const emptyHtml = '<div class="empty-state">暂无任何转写历史。</div>';
+                if (container.innerHTML !== emptyHtml) container.innerHTML = emptyHtml;
+                return;
+            }
+            
+            let htmlStr = '';
+            history.forEach(item => {
+                let statusStr;
+                if (item.status === 'done') statusStr = `<span class="status-done">完成 (耗时: ${item.time_cost}秒)</span>`;
+                else if (item.status === 'cancelled') statusStr = `<span class="status-cancelled">手动中止</span>`;
+                else statusStr = `<span class="status-error">处理失败</span>`;
+                
+                const safeFilename = escapeHTML(item.filename);
+                const hasFile = item.status === 'done' && item.txt_file;
+                htmlStr += `
+                    <div class="list-item">
+                        <div class="item-info" style="margin-right:0;">
+                            <div class="item-name" title="${safeFilename}">${safeFilename}</div>
+                            <div class="item-status">${statusStr}</div>
+                        </div>
+                        ${hasFile ? `<button class="btn-view" data-task-id="${item.task_id}">查看</button>` : ''}
+                    </div>`;
+            });
+            
+            if (htmlStr === lastHistoryHtml) return;
+            lastHistoryHtml = htmlStr;
+            container.innerHTML = htmlStr;
+
+            // 历史记录中的查看按钮事件委托
+            container.querySelectorAll('.btn-view').forEach(btn => {
+                btn.addEventListener('click', () => viewFile(btn.dataset.taskId));
+            });
+        }
+
+        // ================= 日志与进程交互 =================
+        function switchTerminal(taskId, filename) {
+            currentTaskId = taskId;
+            lastSegmentCount = 0;
+            const consoleOutput = document.getElementById('consoleOutput');
+            
+            // 💡 自动清屏：开始新任务时清空历史日志
+            consoleOutput.innerHTML = '';
+            
+            document.getElementById('toolbarStatus').innerHTML = `⏳ 正在解析 "${escapeHTML(filename)}" ，模型初始化中...`;
+            trimConsole();
+            autoScroll();
+            
+            if(pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(checkMyTaskStatus, 1000);
+        }
+
+        async function cancelAnyTask(taskId) {
+            try {
+                await fetch(`${API_BASE}/stop_task/${taskId}`, { method: 'POST' });
+                fetchQueueAndHistory();
+                showToast('已下发中止指令', 'info');
+                if(taskId === currentTaskId) {
+                    if(pollInterval) clearInterval(pollInterval);
+                    pollInterval = null;
+                    document.getElementById('toolbarStatus').innerHTML = '⚠️ 进程已被用户强制中止';
+                    autoScroll();
+                }
+            } catch (e) { console.warn('cancelAnyTask 请求失败:', e); }
+        }
+
+        async function checkMyTaskStatus() {
+            if (!currentTaskId) return;
+            try {
+                const response = await fetch(`${API_BASE}/task_status/${currentTaskId}`);
+                if (!response.ok) return;
+                const data = await response.json();
+                
+                renderSegments(data.segments);
+                
+                if (data.status === 'done') {
+                    if(pollInterval) clearInterval(pollInterval);
+                    pollInterval = null;
+                    // 任务完成时强制重建控制台内容确保可见
+                    const output = document.getElementById('consoleOutput');
+                    let finalHtml = '';
+                    for (const seg of (data.segments || [])) {
+                        const startStr = new Date(seg.start * 1000).toISOString().substring(14, 22);
+                        finalHtml += `
+                            <div class="segment">
+                                <div class="segment-time">[${startStr}]</div>
+                                <div class="segment-text">${escapeHTML(seg.text)}</div>
+                            </div>`;
+                    }
+                    if (finalHtml) output.innerHTML = finalHtml;
+                    lastSegmentCount = data.segments ? data.segments.length : 0;
+                    document.getElementById('toolbarStatus').innerHTML = `✅ 任务完成，共耗时 ${data.result.time_cost} 秒`;
+                    showToast('当前任务已转写完成', 'success');
+                } else if (data.status === 'error') {
+                    if(pollInterval) clearInterval(pollInterval);
+                    pollInterval = null;
+                    // 异常时也强制展示已有片段
+                    const errOutput = document.getElementById('consoleOutput');
+                    if (data.segments && data.segments.length > 0) {
+                        let finalHtml = '';
+                        for (const seg of data.segments) {
+                            const startStr = new Date(seg.start * 1000).toISOString().substring(14, 22);
+                            finalHtml += `
+                                <div class="segment">
+                                    <div class="segment-time">[${startStr}]</div>
+                                    <div class="segment-text">${escapeHTML(seg.text)}</div>
+                                </div>`;
+                        }
+                        errOutput.innerHTML = finalHtml;
+                        lastSegmentCount = data.segments.length;
+                    }
+                    document.getElementById('toolbarStatus').innerHTML = `❌ 发生异常：${escapeHTML(data.error_msg)}`;
+                    showToast('转写任务发生异常而终止', 'error');
+                } else if (data.status === 'cancelled') {
+                    if(pollInterval) clearInterval(pollInterval);
+                    pollInterval = null;
+                }
+            } catch (err) { console.warn('checkMyTaskStatus 请求失败:', err); }
+        }
+
+        function renderSegments(segments) {
+            if (!segments || segments.length === lastSegmentCount) return;
+            
+            // 首次收到识别内容时更新状态
+            if (lastSegmentCount === 0 && segments.length > 0) {
+                document.getElementById('toolbarStatus').innerHTML = '🎤 正在转写中...';
+            }
+            
+            const consoleOutput = document.getElementById('consoleOutput');
+            // 💡 智能检测：判断用户是否处于日志流底部（预留50px偏差以提高容错性）
+            const isScrolledToBottom = consoleOutput.scrollHeight - consoleOutput.clientHeight <= consoleOutput.scrollTop + 50;
+
+            let htmlStr = '';
+            for (let i = lastSegmentCount; i < segments.length; i++) {
+                const seg = segments[i];
+                // 格式化时间为 [MM:SS.ms]
+                const startStr = new Date(seg.start * 1000).toISOString().substring(14, 22);
+                htmlStr += `
+                    <div class="segment">
+                        <div class="segment-time">[${startStr}]</div>
+                        <div class="segment-text">${escapeHTML(seg.text)}</div>
+                    </div>`;
+            }
+            
+            consoleOutput.insertAdjacentHTML('beforeend', htmlStr);
+            lastSegmentCount = segments.length;
+            trimConsole();
+            
+            // 💡 自动检测：如果用户正停留在最底部，则开启滚动跟随；若用户正往上翻看，则停止强制滚动
+            if (isScrolledToBottom) autoScroll();
+        }
+
+        function autoScroll() {
+            const consoleOutput = document.getElementById('consoleOutput');
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+        async function viewFile(taskId) {
+            const overlay = document.getElementById('viewerOverlay');
+            const filenameEl = document.getElementById('viewerFilename');
+            const contentEl = document.getElementById('viewerContent');
+            overlay.classList.add('show');
+            filenameEl.textContent = '加载中...';
+            contentEl.textContent = '正在读取文件...';
+            try {
+                const res = await fetch(`${API_BASE}/task_file/${taskId}`);
+                if (!res.ok) {
+                    contentEl.textContent = '无法读取文件内容（文件可能已被移动或删除）';
+                    return;
+                }
+                const data = await res.json();
+                filenameEl.textContent = escapeHTML(data.filename);
+                contentEl.textContent = data.content;
+            } catch (e) {
+                console.warn('viewFile 请求失败:', e);
+                contentEl.textContent = '网络错误，无法连接服务';
+            }
+        }
+
+        function closeViewer(e) {
+            if (e && e.target !== document.getElementById('viewerOverlay') && e.target !== e.currentTarget) return;
+            document.getElementById('viewerOverlay').classList.remove('show');
+        }
+    </script>
+</body>
+</html>        <button id="startBtn" onclick="submitTask()">提交任务</button>
     </div>
 
     <div class="status" id="statusText">当前无任务。请提交音频路径。</div>
