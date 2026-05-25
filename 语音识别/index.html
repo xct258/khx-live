@@ -492,6 +492,12 @@
             }[tag] || tag));
         };
 
+        function formatSegTime(t) {
+            const d = new Date(t * 1000);
+            const ms = String(d.getMilliseconds()).padStart(3, '0');
+            return d.toISOString().substring(11, 19) + ',' + ms;
+        }
+
         function trimConsole() {
             const el = document.getElementById('consoleOutput');
             while (el.children.length > MAX_LOG_ITEMS) {
@@ -773,10 +779,10 @@
                     const output = document.getElementById('consoleOutput');
                     let finalHtml = '';
                     for (const seg of (data.segments || [])) {
-                        const startStr = new Date(seg.start * 1000).toISOString().substring(14, 22);
+                        const timeStr = formatSegTime(seg.start) + ' --> ' + formatSegTime(seg.end);
                         finalHtml += `
                             <div class="segment">
-                                <div class="segment-time">[${startStr}]</div>
+                                <div class="segment-time">[${timeStr}]</div>
                                 <div class="segment-text">${escapeHTML(seg.text)}</div>
                             </div>`;
                     }
@@ -792,10 +798,10 @@
                     if (data.segments && data.segments.length > 0) {
                         let finalHtml = '';
                         for (const seg of data.segments) {
-                            const startStr = new Date(seg.start * 1000).toISOString().substring(14, 22);
+                            const timeStr = formatSegTime(seg.start) + ' --> ' + formatSegTime(seg.end);
                             finalHtml += `
                                 <div class="segment">
-                                    <div class="segment-time">[${startStr}]</div>
+                                    <div class="segment-time">[${timeStr}]</div>
                                     <div class="segment-text">${escapeHTML(seg.text)}</div>
                                 </div>`;
                         }
@@ -826,11 +832,10 @@
             let htmlStr = '';
             for (let i = lastSegmentCount; i < segments.length; i++) {
                 const seg = segments[i];
-                // 格式化时间为 [MM:SS.ms]
-                const startStr = new Date(seg.start * 1000).toISOString().substring(14, 22);
+                const timeStr = formatSegTime(seg.start) + ' --> ' + formatSegTime(seg.end);
                 htmlStr += `
                     <div class="segment">
-                        <div class="segment-time">[${startStr}]</div>
+                        <div class="segment-time">[${timeStr}]</div>
                         <div class="segment-text">${escapeHTML(seg.text)}</div>
                     </div>`;
             }
