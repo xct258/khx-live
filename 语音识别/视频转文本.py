@@ -131,40 +131,42 @@ def main_worker():
                 initial_prompt="以下是普通话录音，请使用简体中文，并加入适当的标点符号。"
             )
 
-            current_words = []
             MAX_GAP, MAX_SENTENCE_DURATION = 0.5, 8.0
 
             for segment in segments:
                 if tasks_db[task_id].get("status") == "cancelled":
                     break
 
-                if segment.words:
-                    for word in segment.words:
-                        word_text = converter.convert(word.word.strip())
-                        if not word_text: continue
-                        
-                        if not current_words:
-                            current_words.append(word)
+                if not segment.words:
+                    continue
+
+                current_words = []
+                for word in segment.words:
+                    word_text = converter.convert(word.word.strip())
+                    if not word_text: continue
+
+                    if not current_words:
+                        current_words.append(word)
+                    else:
+                        gap = word.start - current_words[-1].end
+                        duration_so_far = word.start - current_words[0].start
+
+                        if gap > MAX_GAP or duration_so_far > MAX_SENTENCE_DURATION:
+                            full_text = "".join([converter.convert(w.word.strip()) for w in current_words])
+                            tasks_db[task_id]["segments"].append({'start': current_words[0].start, 'end': current_words[-1].end, 'text': full_text})
+                            current_words = [word]
                         else:
-                            gap = word.start - current_words[-1].end
-                            duration_so_far = word.start - current_words[0].start
-                            
-                            if gap > MAX_GAP or duration_so_far > MAX_SENTENCE_DURATION:
-                                full_text = "".join([converter.convert(w.word.strip()) for w in current_words])
-                                tasks_db[task_id]["segments"].append({'start': current_words[0].start, 'end': current_words[-1].end, 'text': full_text})
-                                current_words = [word]
-                            else:
-                                current_words.append(word)
+                            current_words.append(word)
+
+                if current_words:
+                    full_text = "".join([converter.convert(w.word.strip()) for w in current_words])
+                    tasks_db[task_id]["segments"].append({'start': current_words[0].start, 'end': current_words[-1].end, 'text': full_text})
 
             if tasks_db[task_id].get("status") == "cancelled":
                 print(f"[-] 任务 {task_id} 已终止，准备接管下一个任务...")
                 write_log(task_id, tasks_db[task_id]) # 记录中途取消日志
                 save_db()
                 continue
-
-            if current_words:
-                full_text = "".join([converter.convert(w.word.strip()) for w in current_words])
-                tasks_db[task_id]["segments"].append({'start': current_words[0].start, 'end': current_words[-1].end, 'text': full_text})
 
             # --- 文件生成 ---
             duration = time.time() - start_time
@@ -197,7 +199,7 @@ def main_worker():
                 f.write("  转写内容\n")
                 f.write("-" * 56 + "\n\n")
                 for item in tasks_db[task_id]["segments"]:
-                    f.write(f"[{format_timestamp(item['start'])} --> {format_timestamp(item['end'])}] {item['text']}\n")
+                    f.write(f"[{format_srt_timestamp(item['start'])} --> {format_srt_timestamp(item['end'])}] {item['text']}\n")
 
             with open(srt_path, "w", encoding="utf-8") as f:
                 for i, item in enumerate(tasks_db[task_id]["segments"], 1):
