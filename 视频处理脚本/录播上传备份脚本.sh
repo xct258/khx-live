@@ -267,6 +267,7 @@ else
 
         if [[ "$streamer_name" == "括弧笑bilibili" && " ${update_servers[*]} " == *" $recording_platform "* ]]; then
           ext="${filename##*.}"
+          [[ "$ext" != "mp4" && "$ext" != "flv" ]] && continue
           if [[ "$filename" == 投稿版-* ]]; then
             log info "检测到投稿版视频，跳过弹幕压制"
             compressed_files+=("${cache_dir}/${filename}")
