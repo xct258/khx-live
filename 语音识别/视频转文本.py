@@ -5,15 +5,9 @@ import uuid
 import json
 import threading
 import queue
+import ctypes
 from contextlib import asynccontextmanager
-import torch
 import opencc
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import uvicorn
-from faster_whisper import WhisperModel
 
 # ================= 1. 环境与路径修复 =================
 def get_base_path():
@@ -22,34 +16,81 @@ def get_base_path():
     else:
         return os.path.dirname(os.path.abspath(__file__))
 
+def get_resource_path(relative_path):
+    """在打包后的 exe 同级 或 _internal 中查找资源文件"""
+    if getattr(sys, 'frozen', False):
+        base = os.path.dirname(sys.executable)
+        path = os.path.join(base, relative_path)
+        if os.path.exists(path):
+            return path
+        path = os.path.join(base, "_internal", relative_path)
+        if os.path.exists(path):
+            return path
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
 BASE_DIR = get_base_path()
+
+MODEL_PATH = os.path.join(BASE_DIR, "models", "turbo")
+GPU_COMPUTE_TYPE = "float16"
+CPU_COMPUTE_TYPE = "int8"
+LANGUAGE = "zh"
+TASK = "transcribe"
+OPENCC_MODE = "t2s"
+DB_PATH = os.path.join(BASE_DIR, "whisper_tasks_db.json")
+LOG_PATH = os.path.join(BASE_DIR, "whisper_history.log")
+SERVER_HOST = "0.0.0.0"
+SERVER_PORT = 8286
+
+TRANSRIBE_PARAMS = {
+    "vad_filter": True,
+    "vad_parameters": {"min_speech_duration_ms": 350, "min_silence_duration_ms": 500},
+}
+
+def add_dll_path(path):
+    try:
+        os.add_dll_directory(path)
+    except Exception:
+        pass
+    try:
+        os.environ["PATH"] = path + os.pathsep + os.environ["PATH"]
+    except Exception:
+        pass
 
 def setup_env():
     if getattr(sys, 'frozen', False):
         nvidia_base = os.path.join(BASE_DIR, "_internal", "nvidia")
+        torch_lib = os.path.join(BASE_DIR, "_internal", "torch", "lib")
     else:
         nvidia_base = os.path.join(sys.prefix, "Lib", "site-packages", "nvidia")
+        torch_lib = os.path.join(sys.prefix, "Lib", "site-packages", "torch", "lib")
 
     if os.path.exists(nvidia_base):
         for root, dirs, files in os.walk(nvidia_base):
             if "bin" in dirs:
-                bin_path = os.path.normpath(os.path.join(root, "bin"))
-                try:
-                    os.add_dll_directory(bin_path)
-                    os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
-                except Exception:
-                    pass
+                add_dll_path(os.path.normpath(os.path.join(root, "bin")))
+
+    if os.path.exists(torch_lib):
+        add_dll_path(torch_lib)
 
 setup_env()
 
+# ================= 2. Torch 相关导入（必须在 setup_env 之后，确保 DLL 路径已设置） =================
+import torch
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+from faster_whisper import WhisperModel
 
-# ================= 2. 全局变量与配置 =================
-global_model = None
-converter = opencc.OpenCC('t2s')
+
+# ================= 3. 全局变量与配置 =================
+models = {}
+converter = opencc.OpenCC(OPENCC_MODE)
 tasks_db = {}
 task_queue = queue.Queue()
-runtime_info = {"model_path": "", "device": "", "compute_type": ""}
-DB_PATH = os.path.join(BASE_DIR, "whisper_tasks_db.json")
+cuda_available = False
+runtime_info = {"device": "", "compute_type": ""}
 
 def save_db():
     data = {}
@@ -75,9 +116,10 @@ def load_db():
         tasks_db = {}
 
 
-# ================= 3. 数据模型与工具函数 =================
+# ================= 4. 数据模型与工具函数 =================
 class AudioRequest(BaseModel):
     audio_path: str
+    device: str = "auto"
 
 def format_srt_timestamp(seconds: float):
     milliseconds = int((seconds - int(seconds)) * 1000)
@@ -86,9 +128,8 @@ def format_srt_timestamp(seconds: float):
 def format_timestamp(seconds: float):
     return time.strftime('%H:%M:%S', time.gmtime(seconds))
 
-# 【新增】本地持久化日志写入函数
 def write_log(task_id, task_info):
-    log_path = os.path.join(BASE_DIR, "whisper_history.log")
+    log_path = LOG_PATH
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     status = task_info.get("status")
     filename = task_info.get("filename")
@@ -103,15 +144,37 @@ def write_log(task_id, task_info):
         f.write(log_msg + "\n")
 
 
-# ================= 4. 核心队列消费者 (后台线程) =================
+# ================= 5. 核心队列消费者 (后台线程) =================
+def load_model(device):
+    key = f"model_{device}"
+    if key not in models:
+        if not os.path.exists(MODEL_PATH):
+            return None
+        compute = GPU_COMPUTE_TYPE if device == "cuda" else CPU_COMPUTE_TYPE
+        print(f"[*] 加载模型 ({device}/{compute})...")
+        models[key] = WhisperModel(MODEL_PATH, device=device, compute_type=compute)
+    return models[key]
+
 def main_worker():
-    global global_model
     while True:
         task_id = task_queue.get()
-        
-        # 1. 检查是否在排队期间就被取消了
+
+        task_info = tasks_db[task_id]
+        requested = task_info.get("requested_device", "auto")
+        if requested == "auto":
+            requested = "cuda" if cuda_available else "cpu"
+
+        model = load_model(requested)
+        if model is None:
+            tasks_db[task_id]["status"] = "error"
+            tasks_db[task_id]["error_msg"] = "模型未加载，请确认 models/turbo 目录存在"
+            write_log(task_id, tasks_db[task_id])
+            save_db()
+            task_queue.task_done()
+            continue
+
         if tasks_db[task_id].get("status") == "cancelled":
-            write_log(task_id, tasks_db[task_id]) # 记录取消日志
+            write_log(task_id, tasks_db[task_id])
             save_db()
             continue
 
@@ -119,48 +182,57 @@ def main_worker():
         save_db()
         audio_path = tasks_db[task_id]["audio_path"]
         start_time = time.time()
-        print(f"[*] 开始处理任务: {tasks_db[task_id]['filename']} (ID: {task_id})")
-        
+        print(f"[*] 开始处理任务: {tasks_db[task_id]['filename']} (ID: {task_id}) [设备: {requested}]")
+
+        tasks_db[task_id]["actual_device"] = requested
+
         try:
-            segments, info = global_model.transcribe(
-                audio_path, language="zh", task="transcribe", word_timestamps=True,
-                beam_size=10, best_of=5, condition_on_previous_text=False,
-                compression_ratio_threshold=2.2, log_prob_threshold=-1.0,
-                no_speech_threshold=0.6, temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-                vad_filter=True, vad_parameters=dict(threshold=0.5, min_speech_duration_ms=250, min_silence_duration_ms=500),
-                initial_prompt="以下是普通话录音，请使用简体中文，并加入适当的标点符号。"
+            segments, info = model.transcribe(
+                audio_path, language=LANGUAGE, task=TASK, word_timestamps=True,
+                **TRANSRIBE_PARAMS,
             )
 
-            MAX_GAP, MAX_SENTENCE_DURATION = 0.5, 8.0
+            MAX_GAP = 1.0
+            MAX_SEGMENT_DURATION = 12.0
 
             for segment in segments:
                 if tasks_db[task_id].get("status") == "cancelled":
                     break
 
                 if not segment.words:
+                    text = converter.convert(segment.text.strip())
+                    if text:
+                        tasks_db[task_id]["segments"].append({'start': segment.start, 'end': segment.end, 'text': text})
                     continue
 
-                current_words = []
+                buf = []
+                buf_start = None
+                buf_end = None
+
                 for word in segment.words:
                     word_text = converter.convert(word.word.strip())
-                    if not word_text: continue
+                    if not word_text:
+                        continue
 
-                    if not current_words:
-                        current_words.append(word)
+                    if not buf:
+                        buf = [word_text]
+                        buf_start = word.start
+                        buf_end = word.end
                     else:
-                        gap = word.start - current_words[-1].end
-                        duration_so_far = word.start - current_words[0].start
+                        gap = max(0, word.start - buf_end)
+                        duration_so_far = word.end - buf_start
 
-                        if gap > MAX_GAP or duration_so_far > MAX_SENTENCE_DURATION:
-                            full_text = "".join([converter.convert(w.word.strip()) for w in current_words])
-                            tasks_db[task_id]["segments"].append({'start': current_words[0].start, 'end': current_words[-1].end, 'text': full_text})
-                            current_words = [word]
+                        if (gap > MAX_GAP and duration_so_far > 2.0) or duration_so_far > MAX_SEGMENT_DURATION:
+                            tasks_db[task_id]["segments"].append({'start': buf_start, 'end': buf_end, 'text': "".join(buf)})
+                            buf = [word_text]
+                            buf_start = word.start
+                            buf_end = word.end
                         else:
-                            current_words.append(word)
+                            buf.append(word_text)
+                            buf_end = word.end
 
-                if current_words:
-                    full_text = "".join([converter.convert(w.word.strip()) for w in current_words])
-                    tasks_db[task_id]["segments"].append({'start': current_words[0].start, 'end': current_words[-1].end, 'text': full_text})
+                if buf:
+                    tasks_db[task_id]["segments"].append({'start': buf_start, 'end': buf_end, 'text': "".join(buf)})
 
             if tasks_db[task_id].get("status") == "cancelled":
                 print(f"[-] 任务 {task_id} 已终止，准备接管下一个任务...")
@@ -190,11 +262,16 @@ def main_worker():
                 f.write(f"  识别语种:        {getattr(info, 'language', 'zh')}\n")
                 f.write(f"  处理完成:        {completion_time}\n")
                 f.write(f"  总耗时:          {duration:.2f} 秒\n")
-                f.write(f"  识别引擎:        faster-whisper ({runtime_info['model_path']})\n")
-                f.write(f"  运行设备:        {runtime_info['device']} ({runtime_info['compute_type']})\n")
+                actual_dev = tasks_db[task_id].get("actual_device", runtime_info.get("device", "cpu"))
+                actual_ctype = GPU_COMPUTE_TYPE if actual_dev == "cuda" else CPU_COMPUTE_TYPE
+                f.write(f"  识别模型:        turbo\n")
+                f.write(f"  运行设备:        {actual_dev} ({actual_ctype})\n")
                 f.write(f"  输出 TXT:        {txt_path}\n")
                 f.write(f"  输出 SRT:        {srt_path}\n")
-                f.write(f"  识别参数:        语言=zh, beam_size=10, best_of=5, VAD=是\n\n")
+                extra = []
+                if TRANSRIBE_PARAMS.get("vad_filter"):
+                    extra.append("VAD=是")
+                f.write(f"  识别参数:        语言={LANGUAGE}{', ' + ', '.join(extra) if extra else ''}\n\n")
                 f.write("-" * 56 + "\n")
                 f.write("  转写内容\n")
                 f.write("-" * 56 + "\n\n")
@@ -222,25 +299,58 @@ def main_worker():
             task_queue.task_done()
 
 
-# ================= 5. App 生命周期管理 =================
+# ================= 6. App 生命周期管理 =================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global global_model, runtime_info
+    global models, runtime_info, cuda_available
     load_db()
-    # 将上次未完成的任务标记为已取消
     for tid in list(tasks_db.keys()):
         if tasks_db[tid].get("status") in ("queued", "running"):
             tasks_db[tid]["status"] = "cancelled"
     save_db()
-    local_model_path = os.path.join(BASE_DIR, "models", "turbo")
-    if not os.path.exists(local_model_path):
-        raise FileNotFoundError(f"严格离线模式：未找到本地模型文件夹 {local_model_path}")
 
-    use_gpu = torch.cuda.is_available()
-    device, compute_type = ("cuda", "float16") if use_gpu else ("cpu", "int8")
-    runtime_info = {"model_path": local_model_path, "device": device, "compute_type": compute_type}
-    print(f"[*] 加载 Whisper 模型 [设备: {device} | 精度: {compute_type}]...")
-    global_model = WhisperModel(local_model_path, device=device, compute_type=compute_type)
+    def detect_cuda():
+        try:
+            if getattr(sys, 'frozen', False):
+                torch_lib = os.path.join(BASE_DIR, "_internal", "torch", "lib")
+            else:
+                torch_lib = os.path.join(sys.prefix, "Lib", "site-packages", "torch", "lib")
+            if os.path.exists(torch_lib):
+                for f in os.listdir(torch_lib):
+                    if f.endswith(".dll") and any(x in f.lower() for x in ["cuda", "cublas", "cudnn", "nvrtc", "nvjit"]):
+                        try:
+                            ctypes.CDLL(os.path.join(torch_lib, f))
+                        except Exception:
+                            pass
+            os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+            nv = ctypes.windll.LoadLibrary("nvcuda.dll")
+            nv.cuInit(0)
+            count = ctypes.c_int()
+            nv.cuDeviceGetCount(ctypes.byref(count))
+            if count.value > 0:
+                name_buf = ctypes.create_string_buffer(256)
+                nv.cuDeviceGetName(name_buf, 256, 0)
+                return True, name_buf.value.decode()
+            return False, "未检测到 CUDA 设备"
+        except Exception as e:
+            return False, str(e)
+
+    use_gpu, gpu_info = detect_cuda()
+    cuda_available = use_gpu
+    if cuda_available:
+        print(f"[*] GPU 加速可用: {gpu_info}")
+    else:
+        print(f"[*] GPU 加速不可用: {gpu_info}")
+
+    dev = "cuda" if cuda_available else "cpu"
+    compute = GPU_COMPUTE_TYPE if cuda_available else CPU_COMPUTE_TYPE
+    runtime_info = {"device": dev, "compute_type": compute}
+
+    if os.path.exists(MODEL_PATH):
+        print(f"[*] 预加载模型 ({dev}/{compute})...")
+        models[f"model_{dev}"] = WhisperModel(MODEL_PATH, device=dev, compute_type=compute)
+    else:
+        print(f"[!] 未找到模型文件夹: {MODEL_PATH}")
     
     threading.Thread(target=main_worker, daemon=True).start()
     yield  
@@ -249,26 +359,66 @@ app = FastAPI(title="Whisper 公共队列服务", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-# ================= 6. API 接口路由 =================
+# ================= 7. API 接口路由 =================
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
-    html_path = os.path.join(BASE_DIR, "index.html")
-    if os.path.exists(html_path):
+    html_path = get_resource_path("index.html")
+    if html_path and os.path.exists(html_path):
         with open(html_path, "r", encoding="utf-8") as f:
             return f.read()
-    return "<h1>请将 index.html 放在 Python 脚本同级目录下</h1>"
+    return "<h1>请将 index.html 放在 exe 同级目录下</h1>"
+
+@app.get("/help", response_class=HTMLResponse)
+async def help_page():
+    return """
+    <!DOCTYPE html><html><body style="background:#0f172a;color:#e2e8f0;font-family:monospace;padding:2rem">
+    <h2>WhisperService 使用说明</h2>
+    <hr>
+    <h3>提交转写任务</h3>
+    <pre>curl -X POST http://0.0.0.0:8286/submit_task \\
+      -H "Content-Type: application/json" \\
+      -d '{"audio_path": "C:/path/to/audio.mp4", "device": "auto"}'</pre>
+    <p><b>device</b> 参数：<code>auto</code>（默认，有GPU则GPU）/ <code>cuda</code>（强制GPU）/ <code>cpu</code>（强制CPU）</p>
+    <h3>查看任务状态</h3>
+    <pre>curl http://0.0.0.0:8286/task_status/{task_id}</pre>
+    <h3>查看队列</h3>
+    <pre>curl http://0.0.0.0:8286/queue_status</pre>
+    <h3>取消任务</h3>
+    <pre>curl -X POST http://0.0.0.0:8286/stop_task/{task_id}</pre>
+    <h3>查看历史记录</h3>
+    <pre>curl http://0.0.0.0:8286/task_history</pre>
+    <h3>服务状态</h3>
+    <pre>curl http://0.0.0.0:8286/status</pre>
+    <hr><p>前端面板: <a href="/" style="color:#60a5fa">/</a></p>
+    </body></html>
+    """
+
+@app.get("/status")
+async def get_service_status():
+    return {
+        "model_loaded": len(models) > 0,
+        "device": runtime_info.get("device", ""),
+        "compute_type": runtime_info.get("compute_type", ""),
+        "queue_size": task_queue.qsize(),
+        "cuda_available": cuda_available
+    }
 
 @app.post("/submit_task")
 async def submit_task(request: AudioRequest):
+    if len(models) == 0:
+        raise HTTPException(status_code=503, detail="模型未加载，请确认 models/turbo 目录存在后重启服务")
     audio_path = request.audio_path.strip().strip('"')
     if not os.path.exists(audio_path):
         raise HTTPException(status_code=404, detail="未找到音频文件")
 
+    task_device = request.device.strip().lower() if request.device else "auto"
+    if task_device not in ("auto", "cuda", "cpu"):
+        raise HTTPException(status_code=400, detail="device 必须是 auto / cuda / cpu")
     task_id = str(uuid.uuid4())
     tasks_db[task_id] = {
         "status": "queued", "segments": [],
         "audio_path": audio_path, "filename": os.path.basename(audio_path),
-        "created_at": time.time()
+        "created_at": time.time(), "requested_device": task_device
     }
     save_db()
     task_queue.put(task_id)
@@ -352,4 +502,12 @@ if __name__ == "__main__":
         },
     }
 
-    uvicorn.run(app, host="0.0.0.0", port=8286, log_config=log_config)
+    html_exists = os.path.exists(get_resource_path("index.html"))
+    print(f"[*] 服务启动: http://{SERVER_HOST}:{SERVER_PORT}")
+    print(f"[*] 前端面板: {'已启用' if html_exists else '未找到 index.html'}, http://localhost:{SERVER_PORT}")
+    print(f"[*] 模型: turbo")
+    params_str = ", ".join(f"{k}={v}" for k, v in TRANSRIBE_PARAMS.items())
+    print(f"[*] 转写参数: {params_str}")
+    print(f"[*] 提交任务: curl -X POST http://0.0.0.0:8286/submit_task -H \"Content-Type: application/json\" -d '{{\"audio_path\": \"C:/path/to/file\", \"device\": \"auto\"}}'")
+    print(f"[*] device: auto(默认) / cuda(仅GPU) / cpu(强制CPU)")
+    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT, log_config=log_config)
