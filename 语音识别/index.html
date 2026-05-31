@@ -97,6 +97,11 @@
             color: #60a5fa;
             border: 1px solid rgba(59, 130, 246, 0.15);
         }
+        .badge-error {
+            background: rgba(239, 68, 68, 0.08);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.15);
+        }
         
         /* 脉冲状态圆点 */
         .pulse-dot-green, .pulse-dot-blue {
@@ -484,6 +489,7 @@
         let currentTaskId = null;     
         let currentFilename = '';
         let lastSegmentCount = 0;
+        let serviceModelLoaded = true;
 
         const escapeHTML = (str) => {
             if (!str) return '';
@@ -536,6 +542,7 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
+            checkServiceStatus();
             fetchQueueAndHistory();
             queueInterval = setInterval(fetchQueueAndHistory, 2000);
 
@@ -620,6 +627,21 @@
         }
 
         // ================= 数据与状态拉取 =================
+        async function checkServiceStatus() {
+            try {
+                const res = await fetch(`${API_BASE}/status`);
+                if (res.ok) {
+                    const data = await res.json();
+                    serviceModelLoaded = data.model_loaded;
+                    const statusText = document.getElementById('globalStatusText');
+                    if (!serviceModelLoaded) {
+                        statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-error"><span class="pulse-dot-green" style="background:#ef4444;"></span>模型未加载</span>`;
+                        document.getElementById('toolbarStatus').innerHTML = '⚠️ 模型未加载，请确认 models 目录存在后重启服务';
+                    }
+                }
+            } catch (e) { /* ignore */ }
+        }
+
         async function fetchQueueAndHistory() {
             try {
                 const [qRes, hRes] = await Promise.all([
@@ -633,17 +655,18 @@
                     
                     document.getElementById('queueCount').innerText = qData.queue.length;
                     const runningTask = qData.queue.find(t => t.status === 'running');
-                    const statusText = document.getElementById('globalStatusText');
                     
-                    if (runningTask) {
-                        statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-running"><span class="pulse-dot-blue"></span>正在转写</span>`;
-                        // 发现新任务立即跟进
-                        if (runningTask.task_id !== currentTaskId) {
-                            switchTerminal(runningTask.task_id, runningTask.filename);
+                    if (serviceModelLoaded) {
+                        const statusText = document.getElementById('globalStatusText');
+                        if (runningTask) {
+                            statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-running"><span class="pulse-dot-blue"></span>正在转写</span>`;
+                            if (runningTask.task_id !== currentTaskId) {
+                                switchTerminal(runningTask.task_id, runningTask.filename);
+                            }
+                        } else {
+                            statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-idle"><span class="pulse-dot-green"></span>服务就绪</span>`;
+                            if(currentTaskId && !pollInterval) currentTaskId = null;
                         }
-                    } else {
-                        statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-idle"><span class="pulse-dot-green"></span>服务就绪</span>`;
-                        if(currentTaskId && !pollInterval) currentTaskId = null;
                     }
                 }
 
