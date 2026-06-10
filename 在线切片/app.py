@@ -5,8 +5,10 @@ import time
 import re
 import shutil
 import subprocess
+import shlex
 import mimetypes
 import threading
+import hashlib
 from datetime import datetime
 from uuid import uuid4
 from pathlib import Path
@@ -37,12 +39,23 @@ COVER_DIR = OUTPUT_DIR / "covers"  # store uploaded cover images separately (now
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"
+AUDIO_M4A_CACHE_DIR = BASE_DIR / "audio_m4a_cache"
+WAVEFORM_CACHE_DIR = BASE_DIR / "waveform_cache"
 ALLOWED_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
+
+CACHE_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
+CACHE_CLEANUP_RULES = [
+    (TMP_OUTPUT_DIR, 6 * 60 * 60),
+    (COVER_DIR, 24 * 60 * 60),
+    (THUMB_CACHE_DIR, 7 * 24 * 60 * 60),
+    (WAVEFORM_CACHE_DIR, 14 * 24 * 60 * 60),
+    (AUDIO_M4A_CACHE_DIR, 30 * 24 * 60 * 60),
+]
 
 # 脚本内测试模式开关：设为 True 则上传进入测试模式（只返回命令预览），False正常上传
 UPLOAD_TEST_MODE = True
 
-for d in [VIDEO_DIR, TMP_OUTPUT_DIR, OUTPUT_DIR, FINISHED_DIR, COVER_DIR, TEMPLATE_DIR, STATIC_DIR, THUMB_CACHE_DIR]:
+for d in [VIDEO_DIR, TMP_OUTPUT_DIR, OUTPUT_DIR, FINISHED_DIR, COVER_DIR, TEMPLATE_DIR, STATIC_DIR, THUMB_CACHE_DIR, AUDIO_M4A_CACHE_DIR, WAVEFORM_CACHE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 MERGE_STATE_PATH = BASE_DIR / "merge_state.json"
@@ -67,6 +80,9 @@ _merge_queue_condition = threading.Condition(_merge_queue_lock)
 
 _upload_runtime_lock = threading.Lock()
 _upload_runtime_proc: Optional[subprocess.Popen] = None
+
+_cache_cleanup_thread_started = False
+_cache_cleanup_start_lock = threading.Lock()
 
 
 # 目录树懒加载缓存：避免前端频繁展开/折叠导致重复扫描同一层目录
@@ -149,6 +165,83 @@ def _terminate_current_upload_proc() -> bool:
         return True
     except Exception:
         return False
+
+
+def _cleanup_old_files(root: Path, max_age_seconds: int, now: Optional[float] = None) -> dict:
+    """Delete expired cache files under root and remove empty subdirectories."""
+    stats = {"files": 0, "dirs": 0, "errors": 0}
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        stats["errors"] += 1
+        return stats
+
+    cutoff = float(now if now is not None else time.time()) - max(0, int(max_age_seconds))
+    try:
+        entries = sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True)
+    except Exception:
+        stats["errors"] += 1
+        return stats
+
+    for p in entries:
+        try:
+            if p.is_symlink():
+                if p.lstat().st_mtime <= cutoff:
+                    p.unlink()
+                    stats["files"] += 1
+                continue
+
+            if p.is_file():
+                if p.stat().st_mtime <= cutoff:
+                    p.unlink()
+                    stats["files"] += 1
+                continue
+
+            if p.is_dir():
+                if p.stat().st_mtime > cutoff:
+                    continue
+                try:
+                    p.rmdir()
+                    stats["dirs"] += 1
+                except OSError:
+                    pass
+        except Exception:
+            stats["errors"] += 1
+
+    return stats
+
+
+def _run_cache_cleanup_once() -> None:
+    now = time.time()
+    summary = []
+    for root, max_age_seconds in CACHE_CLEANUP_RULES:
+        stats = _cleanup_old_files(root, max_age_seconds, now=now)
+        if stats["files"] or stats["dirs"] or stats["errors"]:
+            summary.append(f"{root.name}: files={stats['files']} dirs={stats['dirs']} errors={stats['errors']}")
+    if summary:
+        try:
+            print("[cache-cleanup] " + "; ".join(summary), flush=True)
+        except Exception:
+            pass
+
+
+def _cache_cleanup_worker() -> None:
+    while True:
+        try:
+            _run_cache_cleanup_once()
+        except Exception:
+            pass
+        time.sleep(max(60, int(CACHE_CLEANUP_INTERVAL_SECONDS)))
+
+
+def _start_cache_cleanup_worker() -> None:
+    global _cache_cleanup_thread_started
+    with _cache_cleanup_start_lock:
+        if _cache_cleanup_thread_started:
+            return
+        _cache_cleanup_thread_started = True
+        t = threading.Thread(target=_cache_cleanup_worker, daemon=True, name="cache-cleanup")
+        t.start()
 
 
 def _read_merge_state_unlocked() -> dict:
@@ -637,6 +730,20 @@ def _estimate_eta_seconds(state: dict) -> Optional[float]:
         rate = 20.0
     return remaining / rate
 
+def _calc_state_percent(state: dict) -> Optional[float]:
+    """从 state 计算进度百分比 (0-1)。"""
+    if not isinstance(state, dict):
+        return None
+    try:
+        total = float(state.get("total_seconds") or 0.0)
+        processed = float(state.get("processed_seconds") or 0.0)
+    except Exception:
+        return None
+    if total <= 0:
+        return None
+    return max(0.0, min(1.0, processed / total))
+
+
 # ------------------ 工具函数 ------------------
 def ffmpeg_exists() -> bool:
     return shutil.which("ffmpeg") is not None
@@ -733,6 +840,54 @@ def _ffprobe_duration(path: Path) -> float:
         return d if d > 0 else 0.0
     except Exception:
         return 0.0
+
+
+def _ffprobe_fps(path: Path) -> float:
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=r_frame_rate",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path)
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3.0)
+        if res.returncode != 0:
+            return 0.0
+        val = (res.stdout or "").strip()
+        if not val or val == "N/A":
+            return 0.0
+        parts = val.split("/")
+        if len(parts) == 2:
+            num = float(parts[0])
+            den = float(parts[1])
+            if den > 0:
+                return num / den
+        f = float(val)
+        return f if f > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+_fps_cache: dict[str, tuple[float, int, float]] = {}
+_fps_cache_lock = threading.Lock()
+
+
+def _get_video_fps_cached(path: Path) -> float:
+    """缓存 _ffprobe_fps 结果，按 (路径, mtime, size) 失效。"""
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return 0.0
+    key = str(path)
+    with _fps_cache_lock:
+        cached = _fps_cache.get(key)
+        if cached and cached[1] == int(st.st_mtime) and abs(cached[2] - float(st.st_size)) < 0.5:
+            return cached[0]
+    fps = _ffprobe_fps(path)
+    with _fps_cache_lock:
+        _fps_cache[key] = (fps, int(st.st_mtime), float(st.st_size))
+    return fps
 
 
 def _build_thumb_marks(duration: float, step_sec: int) -> list[float]:
@@ -838,6 +993,17 @@ class CancelMergeRequest(BaseModel):
 class DeleteOutputRequest(BaseModel):
     file: str
 
+class SubtitleEditItem(BaseModel):
+    index: int = Field(ge=0)
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+    text: str = ""
+    delete: bool = False
+
+class SubtitleEditRequest(BaseModel):
+    edits: List[SubtitleEditItem]
+    username: str = ""
+
 # ------------------ FastAPI 应用 ------------------
 app = FastAPI(title="Multi-Video Slicer", version="1.4")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -885,6 +1051,8 @@ def _startup_merge_state_reconcile():
     except Exception:
         pass
 
+    _start_cache_cleanup_worker()
+
 
 @app.get("/api/merge_status")
 async def merge_status(merge_token: Optional[str] = None):
@@ -899,6 +1067,7 @@ async def merge_status(merge_token: Optional[str] = None):
         if queue_info.get("queued"):
             cur_eta_seconds = _estimate_eta_seconds(state) if state.get("running") else None
             cur_eta_human = _format_eta_seconds(cur_eta_seconds)
+            cur_task_pct = _calc_state_percent(state) if state.get("running") else None
             return {
                 "running": False,
                 "queued": True,
@@ -906,6 +1075,7 @@ async def merge_status(merge_token: Optional[str] = None):
                 "queue_length": queue_info["queue_length"],
                 "current_task_eta_seconds": cur_eta_seconds,
                 "current_task_eta_human": cur_eta_human,
+                "current_task_percent": cur_task_pct,
             }
         return {"running": False}
 
@@ -914,6 +1084,7 @@ async def merge_status(merge_token: Optional[str] = None):
     if queue_info.get("queued"):
         cur_eta_seconds = _estimate_eta_seconds(state) if state.get("running") else None
         cur_eta_human = _format_eta_seconds(cur_eta_seconds)
+        cur_task_pct = _calc_state_percent(state) if state.get("running") else None
         return {
             "running": False,
             "queued": True,
@@ -921,6 +1092,7 @@ async def merge_status(merge_token: Optional[str] = None):
             "queue_length": queue_info["queue_length"],
             "current_task_eta_seconds": cur_eta_seconds,
             "current_task_eta_human": cur_eta_human,
+            "current_task_percent": cur_task_pct,
         }
 
     eta_seconds = _estimate_eta_seconds(state)
@@ -1032,6 +1204,522 @@ async def stream_video(name: str, request: Request):
     )
 
 
+# ------------------ 字幕 ------------------
+
+SUBTITLE_EXTS = {".srt", ".txt", ".vtt", ".ass"}
+SUBTITLE_PARSE_TIMESTAMP_RE = re.compile(
+    r"(\d{2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{1,3})"
+)
+
+
+def _parse_timestamp_to_seconds(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms.rjust(3, '0')) / 1000.0
+
+
+def _parse_srt(content: str) -> list[dict]:
+    subtitles = []
+    matches = list(SUBTITLE_PARSE_TIMESTAMP_RE.finditer(content))
+    for match in matches:
+        start = _parse_timestamp_to_seconds(*match.group(1, 2, 3, 4))
+        end = _parse_timestamp_to_seconds(*match.group(5, 6, 7, 8))
+        text_start = match.end()
+        next_match_start = content.find("\n\n", text_start)
+        if next_match_start == -1:
+            text = content[text_start:].strip()
+        else:
+            text = content[text_start:next_match_start].strip()
+        text = "\n".join(line.strip() for line in text.split("\n") if line.strip())
+        if text:
+            subtitles.append({"start": round(start, 3), "end": round(end, 3), "text": text})
+    return subtitles
+
+
+def _parse_txt_timestamps(content: str) -> list[dict]:
+    subtitles = []
+    for match in SUBTITLE_PARSE_TIMESTAMP_RE.finditer(content):
+        start = _parse_timestamp_to_seconds(*match.group(1, 2, 3, 4))
+        end = _parse_timestamp_to_seconds(*match.group(5, 6, 7, 8))
+        text_start = match.end()
+        line_end = content.find("\n", text_start)
+        if line_end == -1:
+            text = content[text_start:].strip()
+        else:
+            text = content[text_start:line_end].strip()
+        text = text.lstrip("]").strip()
+        if text:
+            subtitles.append({"start": round(start, 3), "end": round(end, 3), "text": text})
+    return subtitles
+
+
+def _find_subtitle_files(video_name: str) -> dict[str, str]:
+    try:
+        full_path = sanitize_name(str(Path(video_name)))
+    except HTTPException:
+        return {}
+    if not full_path.exists():
+        return {}
+    video_base = full_path.stem
+    if video_base.startswith(PREVIEW_PREFIX):
+        video_base = video_base[len(PREVIEW_PREFIX):]
+
+    try:
+        rel_parts = full_path.relative_to(VIDEO_DIR).parts
+    except ValueError:
+        orig_dir = full_path.parent
+        result = {}
+        for ext in SUBTITLE_EXTS:
+            candidate = orig_dir / f"{video_base}{ext}"
+            if candidate.exists() and candidate.is_file():
+                result[ext.lstrip(".")] = str(candidate)
+        return result
+
+    parts = list(rel_parts)
+    if len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
+        parts[1] = "原文件"
+    elif len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "原文件":
+        pass
+    else:
+        orig_dir = full_path.parent
+        result = {}
+        for ext in SUBTITLE_EXTS:
+            candidate = orig_dir / f"{video_base}{ext}"
+            if candidate.exists() and candidate.is_file():
+                result[ext.lstrip(".")] = str(candidate)
+        return result
+
+    orig_dir = VIDEO_DIR.joinpath(*parts[:-1]) if len(parts) > 1 else VIDEO_DIR
+    result = {}
+    for ext in SUBTITLE_EXTS:
+        candidate = orig_dir / f"{video_base}{ext}"
+        if candidate.exists() and candidate.is_file():
+            result[ext.lstrip(".")] = str(candidate)
+    return result
+
+
+# ------------------ 字幕编辑与变更记录 ------------------
+
+
+def _seconds_to_srt_ts(sec: float) -> str:
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    ms = int(round((sec - int(sec)) * 1000))
+    if ms >= 1000:
+        s += 1
+        ms = 0
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _subtitles_to_srt(subtitles: list[dict]) -> str:
+    lines = []
+    for i, sub in enumerate(subtitles, 1):
+        start_ts = _seconds_to_srt_ts(sub["start"])
+        end_ts = _seconds_to_srt_ts(sub["end"])
+        lines.append(str(i))
+        lines.append(f"{start_ts} --> {end_ts}")
+        lines.append(sub["text"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _subtitles_to_txt(subtitles: list[dict]) -> str:
+    lines = []
+    for sub in subtitles:
+        start_ts = _seconds_to_srt_ts(sub["start"])
+        end_ts = _seconds_to_srt_ts(sub["end"])
+        lines.append(f"{start_ts} --> {end_ts}]{sub['text']}")
+    return "\n".join(lines) + "\n"
+
+
+def _extract_txt_non_subtitle_content(content: str) -> tuple[str, str]:
+    """返回原始 txt 文件中时间轴条目之外的 (头部内容, 尾部内容)。
+    每条字幕格式: 时间戳 --> 时间戳]文字\\n"""
+    matches = list(SUBTITLE_PARSE_TIMESTAMP_RE.finditer(content))
+    if not matches:
+        return content, ""
+    header = content[:matches[0].start()]
+    # 最后一条字幕所在行结束后的剩余内容
+    last_match = matches[-1]
+    line_end = content.find("\n", last_match.end())
+    if line_end == -1:
+        footer = ""
+    else:
+        pos = line_end + 1
+        while pos < len(content) and content[pos] in ("\n", "\r"):
+            pos += 1
+        footer = content[pos:]
+    return header, footer
+
+
+def _format_change_comments(username: str, edits: list, original_subs: list[dict] | None = None) -> str:
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = [f"{ts} - {username or 'anonymous'}"]
+    for e in edits:
+        if e.delete:
+            orig = (original_subs[e.index] if original_subs and e.index < len(original_subs) else {})
+            deleted_text = orig.get("text", e.text)
+            lines.append(f"  ✕ #{e.index}: 删除 \"{deleted_text}\"")
+        else:
+            lines.append(f"  #{e.index}: {_seconds_to_srt_ts(e.start)} → {_seconds_to_srt_ts(e.end)} - {e.text}")
+    return "\n".join(lines) + "\n"
+
+
+@app.post("/api/subtitle/{name:path}")
+async def save_subtitle(name: str, req: SubtitleEditRequest):
+    subtitle_files = _find_subtitle_files(name)
+    if not subtitle_files:
+        raise HTTPException(404, "未找到字幕文件")
+
+    preferred = None
+    for ext in ["srt", "txt", "vtt", "ass"]:
+        if ext in subtitle_files:
+            preferred = ext
+            break
+    if not preferred:
+        raise HTTPException(404, "未找到字幕文件")
+
+    file_path = Path(subtitle_files[preferred])
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        raise HTTPException(500, f"读取字幕文件失败: {e}")
+
+    if preferred in ("srt", "vtt", "ass"):
+        current_subs = _parse_srt(content)
+    elif preferred == "txt":
+        current_subs = _parse_txt_timestamps(content)
+    else:
+        current_subs = _parse_srt(content)
+
+    original_subs = list(current_subs)
+
+    # 从后往前处理删除，避免索引偏移
+    for edit in sorted(req.edits, key=lambda e: e.index, reverse=True):
+        if edit.index < 0 or edit.index >= len(current_subs):
+            raise HTTPException(400, f"无效的索引 {edit.index}")
+        if edit.delete:
+            current_subs.pop(edit.index)
+        else:
+            current_subs[edit.index] = {
+                "start": round(edit.start, 3),
+                "end": round(edit.end, 3),
+                "text": edit.text.strip(),
+            }
+
+    # Build change record comment block (用原始数据记录删除内容)
+    change_header = _format_change_comments(req.username, req.edits, original_subs)
+
+    # 同时更新所有存在的字幕文件（srt/txt 等）
+    first_sub_path = None
+    for ext, ext_path_str in subtitle_files.items():
+        ext_path = Path(ext_path_str)
+        if first_sub_path is None:
+            first_sub_path = ext_path
+        try:
+            if ext == "txt":
+                # 保留原始 txt 文件中的头部/尾部非时间轴内容（如转写报告）
+                orig_txt = ext_path.read_text(encoding="utf-8", errors="replace")
+                header, footer = _extract_txt_non_subtitle_content(orig_txt)
+                ext_content = header + _subtitles_to_txt(current_subs) + footer
+            else:
+                ext_content = _subtitles_to_srt(current_subs)
+            ext_path.write_text(ext_content, encoding="utf-8")
+        except Exception as e:
+            raise HTTPException(500, f"写入 {ext} 文件失败: {e}")
+
+    # 写入变更记录到 [字幕文件名]_字幕变更记录.txt
+    if first_sub_path:
+        try:
+            sub_stem = first_sub_path.stem
+            record_path = first_sub_path.with_name(f"{sub_stem}_字幕变更记录.txt")
+            existing = record_path.read_text(encoding="utf-8") if record_path.exists() else ""
+            record_path.write_text(existing + change_header, encoding="utf-8")
+        except Exception:
+            pass
+
+    return {"success": True, "subtitles": current_subs}
+
+
+@app.get("/api/subtitle/{name:path}")
+async def get_subtitle(name: str, fmt: str = "list"):
+    subtitle_files = _find_subtitle_files(name)
+    if not subtitle_files:
+        return {"subtitles": [], "available": []}
+
+    available = sorted(subtitle_files.keys())
+
+    if fmt == "json":
+        preferred = None
+        for ext in ["srt", "txt", "vtt", "ass"]:
+            if ext in subtitle_files:
+                preferred = ext
+                break
+        if not preferred:
+            return {"subtitles": [], "available": available}
+        file_path = Path(subtitle_files[preferred])
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return {"subtitles": [], "available": available}
+        if preferred == "srt":
+            subs = _parse_srt(content)
+        elif preferred == "txt":
+            subs = _parse_txt_timestamps(content)
+        else:
+            subs = _parse_srt(content)
+        return {"subtitles": subs, "available": available, "source": preferred}
+
+    if fmt == "raw" and "srt" in subtitle_files:
+        file_path = Path(subtitle_files["srt"])
+        return {"content": file_path.read_text(encoding="utf-8", errors="replace"), "format": "srt"}
+
+    if fmt == "raw" and "txt" in subtitle_files:
+        file_path = Path(subtitle_files["txt"])
+        return {"content": file_path.read_text(encoding="utf-8", errors="replace"), "format": "txt"}
+
+    return {"subtitles": [], "available": available}
+
+
+# ------------------ 音频（原文件） ------------------
+
+AUDIO_EXTS = {".aac", ".mp3", ".wav", ".flac", ".m4a", ".ogg", ".wma"}
+# 浏览器原生支持快速 seek（有全局索引或字节↔时间近似线性）的格式
+AUDIO_SEEKABLE_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".wma"}
+
+_audio_convert_locks: dict[str, threading.Lock] = {}
+_audio_convert_locks_guard = threading.Lock()
+
+
+def _get_audio_convert_lock(key: str) -> threading.Lock:
+    with _audio_convert_locks_guard:
+        lock = _audio_convert_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _audio_convert_locks[key] = lock
+        return lock
+
+
+def _m4a_cache_path_for(src_path: Path) -> Path:
+    try:
+        st = src_path.stat()
+    except FileNotFoundError:
+        st = None
+    safe_name = re.sub(r"[^\w.-]+", "_", src_path.name)
+    sig = f"{src_path.resolve()}|{st.st_size if st else 0}|{int(st.st_mtime) if st else 0}"
+    digest = hashlib.md5(sig.encode("utf-8")).hexdigest()[:16]
+    return AUDIO_M4A_CACHE_DIR / f"{safe_name}__{digest}.m4a"
+
+
+def _ensure_seekable_audio(src_path_str: str) -> str:
+    """对没有全局索引的 raw ADTS AAC 做容器重封装到 m4a (-c copy + faststart)。
+    返回可被浏览器秒级 seek 的文件路径。已是可 seek 格式则原样返回。"""
+    src = Path(src_path_str)
+    ext = src.suffix.lower()
+    if ext in AUDIO_SEEKABLE_EXTS:
+        return src_path_str
+    if ext != ".aac":
+        return src_path_str
+    if not ffmpeg_exists():
+        return src_path_str
+    cache_path = _m4a_cache_path_for(src)
+    if cache_path.exists() and cache_path.stat().st_size > 0:
+        return str(cache_path)
+    lock = _get_audio_convert_lock(str(cache_path))
+    with lock:
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            return str(cache_path)
+        tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        try:
+            cmd = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-i", str(src),
+                "-c", "copy",
+                "-bsf:a", "aac_adtstoasc",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                str(tmp_path),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, timeout=120)
+            if proc.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return src_path_str
+            tmp_path.replace(cache_path)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return src_path_str
+    return str(cache_path) if cache_path.exists() else src_path_str
+
+
+def _find_audio_file(video_name: str) -> Optional[str]:
+    try:
+        full_path = sanitize_name(str(Path(video_name)))
+    except HTTPException:
+        return None
+    if not full_path.exists():
+        return None
+    audio_base = full_path.stem
+    if audio_base.startswith(PREVIEW_PREFIX):
+        audio_base = audio_base[len(PREVIEW_PREFIX):]
+
+    try:
+        rel_parts = full_path.relative_to(VIDEO_DIR).parts
+    except ValueError:
+        for ext in AUDIO_EXTS:
+            candidate = full_path.parent / f"{audio_base}{ext}"
+            if candidate.exists() and candidate.is_file():
+                return str(candidate)
+        return None
+
+    parts = list(rel_parts)
+    if len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
+        parts[1] = "原文件"
+    elif len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "原文件":
+        pass
+    else:
+        for ext in AUDIO_EXTS:
+            candidate = full_path.parent / f"{audio_base}{ext}"
+            if candidate.exists() and candidate.is_file():
+                return str(candidate)
+        return None
+
+    orig_dir = VIDEO_DIR.joinpath(*parts[:-1]) if len(parts) > 1 else VIDEO_DIR
+    for ext in AUDIO_EXTS:
+        candidate = orig_dir / f"{audio_base}{ext}"
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+    return None
+
+
+@app.get("/api/audio_available/{name:path}")
+async def audio_available(name: str):
+    audio_path = _find_audio_file(name)
+    if audio_path:
+        p = Path(audio_path)
+        return {"available": True, "filename": p.name, "size": p.stat().st_size}
+    return {"available": False}
+
+
+@app.get("/api/audio/{name:path}")
+async def stream_audio(name: str, request: Request):
+    audio_path_str = _find_audio_file(name)
+    if not audio_path_str:
+        raise HTTPException(404, "Audio not found")
+    audio_path_str = await asyncio.to_thread(_ensure_seekable_audio, audio_path_str)
+    path = Path(audio_path_str)
+    file_size = path.stat().st_size
+    headers = {}
+    range_header = request.headers.get("Range")
+    if range_header:
+        try:
+            units, rng = range_header.split("=")
+            start_s, end_s = rng.split("-")
+            start = int(start_s) if start_s else 0
+            end = int(end_s) if end_s else file_size - 1
+            end = min(end, file_size - 1)
+            if start > end or start < 0:
+                raise ValueError
+        except Exception:
+            raise HTTPException(416, "Invalid Range header")
+        headers.update({
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(end - start + 1)
+        })
+        return StreamingResponse(
+            iter_file_range(path, start, end),
+            media_type=mimetypes.guess_type(str(path))[0] or "audio/aac",
+            status_code=206,
+            headers=headers
+        )
+    headers.update({"Accept-Ranges": "bytes", "Content-Length": str(file_size)})
+    return StreamingResponse(
+        iter_file_range(path),
+        media_type=mimetypes.guess_type(str(path))[0] or "audio/aac",
+        headers=headers
+    )
+
+
+@app.get("/api/preview_clip")
+async def preview_clip(name: str, start: float, end: float):
+    """预览单个片段：用与切片完全一致的 ffmpeg 参数生成临时文件。
+    预览即切片本身，保证帧数 100% 一致。"""
+    path = sanitize_name(name)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    fps = _get_video_fps_cached(path)
+    if fps <= 0:
+        raise HTTPException(status_code=400, detail="无法获取视频帧率(fps)，预览失败")
+    start_frame = int(round(float(start) * fps))
+    end_frame = int(round(float(end) * fps))
+    total_frames = end_frame - start_frame + 1
+    total_duration = total_frames / fps
+
+    cache_key = f"{name}|{start:.6f}|{end:.6f}"
+    cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]
+    preview_path = TMP_OUTPUT_DIR / f"preview_{cache_hash}.mp4"
+
+    if not preview_path.exists():
+        cmd = ["ffmpeg", "-y",
+               "-ss", f"{float(start):.6f}",
+               "-i", str(path),
+               "-frames:v", str(total_frames - 1),
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+               "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-b:a", "192k",
+               str(preview_path)]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(status_code=500, detail=f"ffmpeg 预览失败: {e.stderr.decode()[:200] if e.stderr else str(e)}")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=500, detail="预览生成超时")
+
+    return FileResponse(preview_path, media_type="video/mp4",
+                        headers={"Cache-Control": "public, max-age=600"})
+
+
+
+
+
+def _ffprobe_first_frame_pts(path: Path) -> float:
+    """获取首帧的 PTS（秒），用于计算帧号偏移"""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "frame=pkt_pts_time",
+            "-read_intervals", "%+#1",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path)
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5.0)
+        if res.returncode != 0:
+            return 0.0
+        val = (res.stdout or "").strip()
+        if not val or val == "N/A":
+            return 0.0
+        return float(val)
+    except Exception:
+        return 0.0
+
+
+@app.get("/api/video_fps/{name:path}")
+async def video_fps(name: str):
+    path = sanitize_name(name)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Video not found")
+    fps = _ffprobe_fps(path)
+    start_pts = _ffprobe_first_frame_pts(path)
+    return {"fps": fps, "start_pts": start_pts}
+
+
 @app.get("/api/thumb_manifest")
 async def thumb_manifest(
     name: str,
@@ -1047,7 +1735,7 @@ async def thumb_manifest(
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Video not found")
 
-    step = 30
+    step = max(5, min(120, int(step or 30)))
     width = max(64, min(480, int(width or 128)))
     height = max(36, min(270, int(height or 72)))
     quality = max(4, min(25, int(quality or 8)))
@@ -1092,7 +1780,7 @@ async def thumb_manifest_stream(
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Video not found")
 
-    step = 30
+    step = max(5, min(120, int(step or 30)))
     width = max(64, min(480, int(width or 128)))
     height = max(36, min(270, int(height or 72)))
     quality = max(4, min(25, int(quality or 8)))
@@ -1138,10 +1826,6 @@ async def thumb_manifest_stream(
 
 
 # ------------------ 音频波形 ------------------
-WAVEFORM_CACHE_DIR = BASE_DIR / "waveform_cache"
-WAVEFORM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def _waveform_cache_path(video_path: Path, duration: float, samples: int) -> Path:
     base_name = video_path.name or "unknown-video"
     safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", base_name).strip(" .")
@@ -1473,12 +2157,14 @@ def _get_merge_queue_info_for_token(merge_token: str) -> dict:
     return {}
 
 
-def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_seconds_all: float, total_clips_all: int, source_mode: str = "encode"):
+def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_seconds_all: float, total_clips_all: int, source_mode: str = "encode", username: str = ""):
     job.status = "running"
     temp_files = []
     list_file: Optional[Path] = None
     processed_seconds = 0.0
     done_clips = 0
+    metadata_output_cursor = 0.0
+    metadata_clips: list[dict] = []
 
     # 运行线程启动时也写入运行态（便于取消时校验/诊断）
     _set_merge_runtime(job_id=job.id, proc=None)
@@ -1493,7 +2179,13 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             return 1.0
         return float(p)
 
-    def _run_ffmpeg_with_progress(cmd: list, clip_duration: float, current_label: str):
+    def _run_ffmpeg_with_progress(
+        cmd: list,
+        clip_duration: float,
+        current_label: str,
+        clips_info: Optional[List[dict]] = None,
+        clip_index: int = -1,
+    ):
         """Run ffmpeg and periodically update merge_state.json using ffmpeg -progress output.
 
         Rewritten for robustness while preserving cancellation and percent updates.
@@ -1528,14 +2220,18 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             except StopIteration:
                 insert_at = len(cmd_with_progress)
             cmd_with_progress[insert_at:insert_at] = [
-                "-loglevel", "error",
-                "-nostats",
+                "-loglevel", "info",
+                "-stats_period", "0.1",
                 "-progress", "pipe:1",
             ]
 
         last_update = 0.0
         out_time_sec = 0.0
         tail = deque(maxlen=200)
+        # 人类可读的实时输出（不含 progress key=value），用于前端展示
+        ffmpeg_log_tail: deque = deque(maxlen=60)
+        # 当前片段的 stats（speed / bitrate / fps / frame），前端可显示为状态条
+        last_stats: dict = {}
 
         proc = subprocess.Popen(
             cmd_with_progress,
@@ -1557,41 +2253,79 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
                     pass
                 raise MergeCancelled("用户取消合并")
 
-            line = (raw_line or "").strip()
-            if line:
-                tail.append(line)
+            line = (raw_line or "").rstrip()
+            stripped = line.strip()
+            if stripped:
+                tail.append(stripped)
 
-            # parse key=value progress lines (out_time_ms/out_time_us)
-            if "=" in line:
-                k, v = line.split("=", 1)
+            # parse key=value progress lines (out_time_ms/out_time_us + stats)
+            is_progress_line = False
+            if "=" in stripped:
+                k, v = stripped.split("=", 1)
                 k = k.strip()
                 v = v.strip()
                 if k == "out_time_ms":
+                    is_progress_line = True
                     try:
                         out_time_sec = max(0.0, int(v) / 1_000_000.0)
                     except Exception:
                         pass
                 elif k == "out_time_us":
+                    is_progress_line = True
                     try:
                         out_time_sec = max(0.0, int(v) / 1_000_000.0)
                     except Exception:
                         pass
+                elif k in ("speed", "bitrate", "fps", "frame", "total_size", "elapsed", "remaining_time", "dup_frames", "drop_frames"):
+                    is_progress_line = True
+                    try:
+                        last_stats[k] = v
+                    except Exception:
+                        pass
+                # 其它 key=value（如 stream info）也作为日志记录
+                if not is_progress_line:
+                    ffmpeg_log_tail.append(stripped)
+            else:
+                # 非 key=value 行（ffmpeg 状态/警告/错误）写入日志
+                if stripped:
+                    ffmpeg_log_tail.append(stripped)
 
             # periodic state update (throttled)
             now_mono = time.monotonic()
-            if now_mono - last_update >= 0.5:
+            if now_mono - last_update >= 0.2:
                 effective = out_time_sec
                 if clip_duration and clip_duration > 0 and effective > clip_duration:
                     effective = clip_duration
                 processed_now = processed_seconds + float(effective)
+
+                # 同步更新当前片段的实时进度
+                if clips_info is not None and 0 <= clip_index < len(clips_info):
+                    _ci = clips_info[clip_index]
+                    if clip_duration and clip_duration > 0:
+                        _ci["progress"] = max(0.0, min(1.0, effective / clip_duration))
+                    else:
+                        _ci["progress"] = 1.0
+
+                # 把 speed/bitrate/fps 拼成单行（给前端做状态条）
+                stats_line_parts = []
+                if last_stats.get("speed"):  stats_line_parts.append(f"speed={last_stats['speed']}")
+                if last_stats.get("bitrate"): stats_line_parts.append(f"bitrate={last_stats['bitrate']}")
+                if last_stats.get("fps"):     stats_line_parts.append(f"fps={last_stats['fps']}")
+                if last_stats.get("frame"):   stats_line_parts.append(f"frame={last_stats['frame']}")
+                stats_line = " · ".join(stats_line_parts)
+
                 _update_merge_state(
                     stage="slicing",
                     current=current_label,
+                    current_clip_index=int(clip_index) if clip_index >= 0 else None,
                     total_clips=int(total_clips_all),
                     done_clips=int(done_clips),
                     total_seconds=float(total_seconds_all),
                     processed_seconds=float(processed_now),
                     percent=_safe_percent(processed_now),
+                    clips=list(clips_info) if clips_info is not None else None,
+                    ffmpeg_log=list(ffmpeg_log_tail),
+                    ffmpeg_stats=stats_line,
                 )
                 last_update = now_mono
 
@@ -1651,6 +2385,55 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
         finally:
             _set_merge_runtime(proc=None)
 
+    # ----------------- 预构建全局片段列表（供前端按片段显示进度） -----------------
+    def _clip_video_display_name(name: str) -> str:
+        try:
+            return Path(name).name
+        except Exception:
+            return str(name)
+
+    def _round_meta_seconds(value: float) -> float:
+        try:
+            return round(float(value), 6)
+        except Exception:
+            return 0.0
+
+    def _build_output_clip_metadata() -> dict:
+        created_at = datetime.now().isoformat(timespec="seconds")
+        return {
+            "schema": "bililive-slicer.clips.v1",
+            "tool": "online-slicer",
+            "job_id": job.id,
+            "created_at": created_at,
+            "username": str(username or ""),
+            "source_mode": str(source_mode or ""),
+            "total_clips": int(total_clips_all),
+            "total_seconds": _round_meta_seconds(total_seconds_all),
+            "clips": list(metadata_clips),
+        }
+
+    clips_info: List[dict] = []
+    _gi = 0
+    for _v_i, _v in enumerate(videos):
+        for _c_i, _c in enumerate(_v.clips):
+            _start = float(_c.start)
+            _end = float(_c.end)
+            clips_info.append({
+                "index": _gi,
+                "global_index": _gi + 1,            # 1-based
+                "video": _clip_video_display_name(_v.name),
+                "video_index": _v_i,
+                "clip_index_in_video": _c_i + 1,
+                "total_in_video": len(_v.clips),
+                "start": _start,
+                "end": _end,
+                "duration": max(0.0, _end - _start),
+                "status": "pending",                 # pending | running | done
+                "progress": 0.0,
+                "command": None,
+            })
+            _gi += 1
+
     try:
         _update_merge_state(
             status="running",
@@ -1660,6 +2443,7 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             total_seconds=float(total_seconds_all),
             processed_seconds=0.0,
             percent=0.0,
+            clips=list(clips_info),
         )
 
         for vid_idx, vid in enumerate(videos):
@@ -1704,64 +2488,105 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             src = sanitize_name(target_name)
             if not src.exists():
                 raise FileNotFoundError(f"找不到源文件 (模式: {source_mode}): {target_name}")
+            src_fps = _get_video_fps_cached(src)
+
+            # ---------- 单条 ffmpeg 命令：视频+音频一次切片（消除 SoX/mux 的对不齐风险） ----------
             for i, clip in enumerate(vid.clips):
                 if _merge_cancel_event.is_set():
                     raise MergeCancelled("用户取消合并")
                 if clip.end <= clip.start:
                     raise ValueError(f"Clip end <= start in {vid.name}")
-                tmp = TMP_OUTPUT_DIR / f"{job.id}_{vid_idx}_{i}.ts"
-                # 先加入清理列表：避免取消/失败发生在 temp_files.append 之前导致残留
+
+                # 全局片段索引（与 clips_info 对齐）
+                global_clip_index = sum(len(v.clips) for v in videos[:vid_idx]) + i
+                cur_clip_info = clips_info[global_clip_index]
+                cur_clip_info["status"] = "running"
+                cur_clip_info["progress"] = 0.0
+
+                # 按帧精确计算：起止帧号、总帧数、精确时长
+                start_frame = int(round(float(clip.start) * src_fps))
+                end_frame = int(round(float(clip.end) * src_fps))
+                total_frames = end_frame - start_frame + 1
+                total_duration = total_frames / src_fps
+                clip_output_start = metadata_output_cursor
+
+                tmp = TMP_OUTPUT_DIR / f"{job.id}_{vid_idx}_{i}.mkv"
                 if tmp not in temp_files:
                     temp_files.append(tmp)
-                duration = clip.end - clip.start
-                
-                # 精准切割（优化性能）：采用 "预跳（input -ss）+ 精调（post -ss）" 的混合策略。
-                fast_seek = max(0.0, float(clip.start) - 1.0)
-                delta = float(clip.start) - fast_seek
 
-                cmd = ["ffmpeg", "-y"]
-                if fast_seek > 0:
-                    cmd += ["-ss", f"{fast_seek:.3f}"]
-                cmd += ["-i", str(src)]
-                if delta > 0:
-                    cmd += ["-ss", f"{delta:.3f}"]
-                cmd += [
-                    "-t", f"{float(duration):.3f}",
-                    "-c:v", "libx264",
-                    "-preset", "veryfast",
-                    "-crf", "23",
-                    "-pix_fmt", "yuv420p",
-                    "-c:a", "copy",
-                    "-avoid_negative_ts", "1",
-                    "-f", "mpegts",
-                    str(tmp)
-                ]
+                cmd_seg = ["ffmpeg", "-y",
+                           "-ss", f"{float(clip.start):.6f}",
+                           "-i", str(src),
+                           "-frames:v", str(total_frames),
+                           "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                           "-c:a", "aac", "-b:a", "192k",
+                           str(tmp)]
+
+                cmd_display = shlex.join(cmd_seg)
+                cur_clip_info["command"] = cmd_display
 
                 current_label = f"{vid.name} 片段 {i+1}/{len(vid.clips)}"
                 _update_merge_state(
                     stage="slicing",
                     current=current_label,
+                    current_clip_index=int(global_clip_index),
                     total_clips=int(total_clips_all),
                     done_clips=int(done_clips),
                     total_seconds=float(total_seconds_all),
                     processed_seconds=float(processed_seconds),
                     percent=_safe_percent(processed_seconds),
+                    clips=list(clips_info),
+                    current_command=cmd_display,
                 )
 
-                _run_ffmpeg_with_progress(cmd, float(duration), current_label)
+                _run_ffmpeg_with_progress(
+                    cmd_seg, float(total_duration), current_label,
+                    clips_info=clips_info, clip_index=global_clip_index,
+                )
+
+                metadata_clips.append({
+                    "index": int(global_clip_index + 1),
+                    "video_index": int(vid_idx + 1),
+                    "clip_index_in_video": int(i + 1),
+                    "selected_video": str(vid.name),
+                    "source_video": str(target_name),
+                    "source_mode": str(source_mode),
+                    "source_fps": _round_meta_seconds(src_fps),
+                    "source_start": _round_meta_seconds(float(clip.start)),
+                    "source_end": _round_meta_seconds(float(clip.end)),
+                    "start_frame": int(start_frame),
+                    "end_frame": int(end_frame),
+                    "frame_count": int(total_frames),
+                    "duration": _round_meta_seconds(total_duration),
+                    "output_start": _round_meta_seconds(clip_output_start),
+                    "output_end": _round_meta_seconds(clip_output_start + float(total_duration)),
+                })
+                metadata_output_cursor += float(total_duration)
+
+                cur_clip_info["status"] = "done"
+                cur_clip_info["progress"] = 1.0
+                cur_clip_info["command"] = None
 
                 done_clips += 1
-                processed_seconds += float(duration)
+                processed_seconds += float(total_duration)
                 _update_merge_state(
                     stage="slicing",
                     current=current_label,
+                    current_clip_index=int(global_clip_index),
                     total_clips=int(total_clips_all),
                     done_clips=int(done_clips),
                     total_seconds=float(total_seconds_all),
                     processed_seconds=float(processed_seconds),
                     percent=_safe_percent(processed_seconds),
+                    clips=list(clips_info),
+                    current_command=None,
                 )
-        
+
+        # 进入合并阶段前，把所有片段都标为 done（确保 UI 显示完整）
+        for _ci in clips_info:
+            _ci["status"] = "done"
+            _ci["progress"] = 1.0
+
         list_file = TMP_OUTPUT_DIR / f"{job.id}_list.txt"
         with list_file.open("w", encoding="utf-8") as f:
             for tmp in temp_files:
@@ -1771,9 +2596,35 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             stage="merging",
             current="合并中",
             percent=max(_safe_percent(processed_seconds), 0.98),
+            clips=list(clips_info),
         )
 
-        cmd_concat = ["ffmpeg","-hide_banner","-y","-f","concat","-safe","0","-i",str(list_file),"-c","copy","-bsf:a","aac_adtstoasc",str(out_path)]
+        output_metadata = _build_output_clip_metadata()
+        output_metadata_json = json.dumps(output_metadata, ensure_ascii=False, separators=(",", ":"))
+        output_metadata_desc = f"online-slicer clips={len(metadata_clips)} duration={_round_meta_seconds(metadata_output_cursor)}s"
+        cmd_concat = [
+            "ffmpeg", "-hide_banner", "-y",
+            "-f", "concat", "-safe", "0", "-i", str(list_file),
+            "-map_metadata", "-1",
+            "-metadata", f"title={out_path.stem}",
+            "-metadata", "encoded_by=online-slicer",
+            "-metadata", "bililive_slicer_schema=bililive-slicer.clips.v1",
+            "-metadata", f"description={output_metadata_desc}",
+            "-metadata", f"comment={output_metadata_json}",
+            "-movflags", "+faststart+use_metadata_tags",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            str(out_path),
+        ]
+        cmd_concat_display = shlex.join(cmd_concat)
+        _update_merge_state(
+            stage="merging",
+            current="合并中",
+            percent=max(_safe_percent(processed_seconds), 0.98),
+            clips=list(clips_info),
+            current_command=cmd_concat_display,
+            ffmpeg_log=[],
+            ffmpeg_stats="",
+        )
         _run_ffmpeg_concat_with_cancel(cmd_concat)
         job.status = "done"
 
@@ -1862,7 +2713,9 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
 
         # 兜底：按 job_id 模式把可能遗漏的临时文件也删掉（例如取消发生在写入列表之前）
         try:
-            for p in TMP_OUTPUT_DIR.glob(f"{job.id}_*.ts"):
+            for p in TMP_OUTPUT_DIR.glob(f"{job.id}_*.mkv"):
+                cleanup_targets.append(p)
+            for p in TMP_OUTPUT_DIR.glob(f"{job.id}_*audio*.wav"):
                 cleanup_targets.append(p)
             for p in TMP_OUTPUT_DIR.glob(f"{job.id}_list.txt"):
                 cleanup_targets.append(p)
@@ -1932,7 +2785,7 @@ def _merge_queue_worker():
             }
             _write_merge_state_unlocked(state)
 
-        _run_merge(job, videos, out_path, float(total_seconds), int(total_clips), source_mode_val)
+        _run_merge(job, videos, out_path, float(total_seconds), int(total_clips), source_mode_val, username)
 
 
 # 启动合并队列工作线程
@@ -2159,4 +3012,16 @@ async def upload_bili(
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     stats = _increment_stat("visit_count")
-    return templates.TemplateResponse("index.html", {"request": request, "stats": stats})
+    # 注入静态资源版本号（按文件 mtime），用于强制浏览器加载最新 script.js / style.css
+    def _v(p: Path) -> str:
+        try:
+            return str(int(p.stat().st_mtime))
+        except Exception:
+            return "0"
+    ctx = {
+        "request": request,
+        "stats": stats,
+        "script_v": _v(STATIC_DIR / "script.js"),
+        "style_v": _v(STATIC_DIR / "style.css"),
+    }
+    return templates.TemplateResponse(request, "index.html", ctx)
