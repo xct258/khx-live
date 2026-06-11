@@ -97,7 +97,7 @@ mkdir -p /opt/bililive/config /opt/bililive/scripts /opt/bililive/biliup /opt/we
 wget -O /opt/bililive/config/config.conf https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/config.conf
 wget -O /opt/bililive/scripts/录播上传备份脚本.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/录播上传备份脚本.sh
 wget -O /opt/bililive/scripts/压制视频.py https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/压制视频.py
-wget -O /opt/bililive/scripts/封面获取.py https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/封面获取.py
+wget -O /opt/bililive/scripts/视频信息获取.py https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/视频信息获取.py
 wget -O /opt/bililive/scripts/ffmpeg视频处理.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/ffmpeg视频处理.sh
 wget -O /opt/bililive/biliup/biliup后处理.sh https://raw.githubusercontent.com/xct258/khx-live/main/biliup/biliup后处理.sh
 wget -O /opt/bililive/scripts/log.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/log.sh
