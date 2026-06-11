@@ -3401,6 +3401,11 @@ pre {
     overscroll-behavior: contain;
 }
 
+.subtitle-virtual-spacer {
+    flex: 0 0 auto;
+    pointer-events: none;
+}
+
 .subtitle-list-item {
     display: grid;
     grid-template-columns: auto 1fr auto;
@@ -3413,6 +3418,7 @@ pre {
     border: 1px solid transparent;
     cursor: pointer;
     transition: background 150ms ease, border-color 150ms ease;
+    min-height: 82px;
 }
 
 .subtitle-list-item:hover {

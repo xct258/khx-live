@@ -4042,9 +4042,8 @@ async function loadFileTree(path = '', sourceLi = null) {
                     updateClipInputs();
                     renderNewClipList();
 
-                    // 选择视频后自动加载字幕和帧率（无需预览也可使用字幕切片）
+                    // 选择视频后只加载字幕；FPS 在真正需要视频预览/帧精确操作时再加载
                     __loadSubtitle();
-                    __ensureVideoFps();
                 });
                 li.appendChild(span);
             }
@@ -4315,6 +4314,7 @@ __saveClipToolState();
 
 function __updateSubtitleSliceState() {
     if (subtitleSlicePanel && subtitleSlicePanel.style.display !== 'none') {
+        __subtitleAddedCacheKey = '';
         __renderSubtitleList();
     }
 }
@@ -6209,6 +6209,14 @@ let __subtitleItemEls = [];
 let __subtitleListInited = false;
 let __subtitleEditingIndex = -1;
 let __subtitleEditOrigData = null;
+const SUBTITLE_VIRTUAL_ROW_HEIGHT = 86;
+const SUBTITLE_VIRTUAL_BUFFER = 8;
+let __subtitleVirtualStart = -1;
+let __subtitleVirtualEnd = -1;
+let __subtitleVirtualScrollBound = false;
+let __subtitleVirtualScrollRaf = null;
+let __subtitleAddedFlags = [];
+let __subtitleAddedCacheKey = '';
 const audioPlayer = document.getElementById('audioPlayer');
 const subtitleSlicePanel = document.getElementById('subtitleSlicePanel');
 const subtitleListContainer = document.getElementById('subtitleListContainer');
@@ -6224,101 +6232,244 @@ function __hideSubtitleSlicePanel() {
     subtitleSlicePanel.style.display = 'none';
 }
 
-function __buildSubtitleItemEls() {
-    if (!subtitleListContainer) return;
+function __resetSubtitleVirtualList() {
     __subtitleItemEls = [];
     __subtitleListInited = false;
-    const fragment = document.createDocumentFragment();
+    __subtitleVirtualStart = -1;
+    __subtitleVirtualEnd = -1;
+}
+
+function __makeSubtitleAddedCacheKey() {
+    const parts = [String(currentVideoName || ''), String(__subtitleData.length)];
+    for (const t of (videoTasks || [])) {
+        if (String(t?.name || '') !== String(currentVideoName || '')) continue;
+        const clips = Array.isArray(t?.clips) ? t.clips : [];
+        for (const c of clips) {
+            parts.push([c.start, c.end, c._subStart, c._subEnd].map(v => String(v ?? '')).join(','));
+        }
+    }
+    return parts.join('|');
+}
+
+function __ensureSubtitleAddedCache() {
+    const key = __makeSubtitleAddedCacheKey();
+    if (key === __subtitleAddedCacheKey && __subtitleAddedFlags.length === __subtitleData.length) return;
+
+    __subtitleAddedCacheKey = key;
+    __subtitleAddedFlags = new Array(__subtitleData.length).fill(false);
+    if (!currentVideoName || !__subtitleData.length) return;
+
+    let clips = [];
+    for (const t of (videoTasks || [])) {
+        if (String(t?.name || '') !== String(currentVideoName || '')) continue;
+        clips = clips.concat(Array.isArray(t?.clips) ? t.clips : []);
+    }
+    clips = clips
+        .map(c => ({
+            start: Number(c.start),
+            end: Number(c.end),
+            _subStart: c._subStart,
+            _subEnd: c._subEnd,
+        }))
+        .filter(c => Number.isFinite(c.start) && Number.isFinite(c.end) && c.end > c.start)
+        .sort((a, b) => a.start - b.start);
+    if (!clips.length) return;
+
+    let clipIdx = 0;
     for (let i = 0; i < __subtitleData.length; i++) {
         const sub = __subtitleData[i];
-        const el = document.createElement('div');
-        el.className = 'subtitle-list-item';
-        el.dataset.subtitleIndex = String(i);
-        el.title = '点击跳转到此位置';
-        const isEditing = (__subtitleEditingIndex === i);
-        if (isEditing) {
-            const orig = __subtitleEditOrigData || sub;
-            el.innerHTML = '<button class="sub-play-btn" title="在主播放器播放此片段">▶</button>'
-                + '<span class="sub-time">'
-                + '<input class="sub-time-input" data-field="start" value="' + formatTime(orig.start) + '" title="开始时间">'
-                + ' → '
-                + '<input class="sub-time-input" data-field="end" value="' + formatTime(orig.end) + '" title="结束时间">'
-                + '</span>'
-                + '<span class="sub-actions">'
-                + '<button class="sub-save-btn" title="保存修改">保存</button>'
-                + '<button class="sub-cancel-btn" title="取消修改">取消</button>'
-                + '<button class="sub-del-btn" title="删除此字幕">删除</button>'
-                + '</span>'
-                + '<span class="sub-text-edit"><textarea class="sub-textarea">' + __escapeHtml(orig.text) + '</textarea></span>';
-        } else {
-            const fps = __getVideoFpsSync();
-            const startFrame = fps > 0 ? Math.round(sub.start * fps) : null;
-            const endFrame = fps > 0 ? Math.round(sub.end * fps) : null;
-            const frameInfo = (startFrame !== null && endFrame !== null)
-                ? `<span class="sub-frame-info" title="帧号：${startFrame} → ${endFrame}" style="font-size:10px; opacity:0.5; margin-left:4px;">#${startFrame}→${endFrame}</span>`
-                : '';
-            el.innerHTML = '<button class="sub-play-btn" title="在主播放器播放此片段">▶</button>'
-                + '<span class="sub-time">'
-                + '<span class="sub-time-value" data-field="start" title="双击编辑开始时间">' + formatTime(sub.start) + '</span>'
-                + ' → '
-                + '<span class="sub-time-value" data-field="end" title="双击编辑结束时间">' + formatTime(sub.end) + '</span>'
-                + frameInfo
-                + '</span>'
-                + '<span class="sub-actions">'
-                + '<button class="sub-edit-btn" title="编辑字幕">编辑</button>'
-                + '<button class="sub-add-btn" title="添加为片段">+</button>'
-                + '</span>'
-                + '<span class="sub-text">' + __escapeHtml(sub.text) + '</span>';
+        const subStart = Number(sub.start);
+        const subEnd = Number(sub.end);
+        if (!Number.isFinite(subStart) || !Number.isFinite(subEnd)) continue;
+
+        while (clipIdx < clips.length && clips[clipIdx].end <= subStart) clipIdx++;
+        for (let j = clipIdx; j < clips.length; j++) {
+            const clip = clips[j];
+            if (clip.start >= subEnd) break;
+            if (subStart < clip.end && subEnd > clip.start) {
+                if (clip._subEnd !== undefined && subStart === clip._subEnd) continue;
+                if (clip._subStart !== undefined && subEnd === clip._subStart) continue;
+                __subtitleAddedFlags[i] = true;
+                break;
+            }
         }
-        fragment.appendChild(el);
-        __subtitleItemEls.push(el);
     }
-    subtitleListContainer.innerHTML = '';
-    subtitleListContainer.appendChild(fragment);
-    __subtitleListInited = true;
+}
+
+function __isSubtitleAddedByIndex(idx) {
+    __ensureSubtitleAddedCache();
+    return !!__subtitleAddedFlags[idx];
+}
+
+function __ensureSubtitleVirtualScrollBound() {
+    if (!subtitleListContainer || __subtitleVirtualScrollBound) return;
+    __subtitleVirtualScrollBound = true;
+    subtitleListContainer.addEventListener('scroll', function () {
+        if (__subtitleVirtualScrollRaf) return;
+        __subtitleVirtualScrollRaf = requestAnimationFrame(function () {
+            __subtitleVirtualScrollRaf = null;
+            if (subtitleSlicePanel && subtitleSlicePanel.style.display === 'none') return;
+            __renderSubtitleList();
+        });
+    }, { passive: true });
+}
+
+function __getSubtitleVisibleRange() {
+    const total = __subtitleData.length;
+    const rowHeight = SUBTITLE_VIRTUAL_ROW_HEIGHT;
+    const viewportHeight = Math.max(240, subtitleListContainer?.clientHeight || 380);
+    const scrollTop = Math.max(0, subtitleListContainer?.scrollTop || 0);
+    const start = Math.max(0, Math.floor(scrollTop / rowHeight) - SUBTITLE_VIRTUAL_BUFFER);
+    const count = Math.ceil(viewportHeight / rowHeight) + SUBTITLE_VIRTUAL_BUFFER * 2;
+    const end = Math.min(total, start + count);
+    return { start, end };
+}
+
+function __createSubtitleItemEl(i) {
+    const sub = __subtitleData[i];
+    const el = document.createElement('div');
+    el.className = 'subtitle-list-item';
+    el.dataset.subtitleIndex = String(i);
+    el.title = '点击跳转到此位置';
+    const isEditing = (__subtitleEditingIndex === i);
+    if (isEditing) {
+        const orig = __subtitleEditOrigData || sub;
+        el.innerHTML = '<button class="sub-play-btn" title="在主播放器播放此片段">▶</button>'
+            + '<span class="sub-time">'
+            + '<input class="sub-time-input" data-field="start" value="' + formatTime(orig.start) + '" title="开始时间">'
+            + ' → '
+            + '<input class="sub-time-input" data-field="end" value="' + formatTime(orig.end) + '" title="结束时间">'
+            + '</span>'
+            + '<span class="sub-actions">'
+            + '<button class="sub-save-btn" title="保存修改">保存</button>'
+            + '<button class="sub-cancel-btn" title="取消修改">取消</button>'
+            + '<button class="sub-del-btn" title="删除此字幕">删除</button>'
+            + '</span>'
+            + '<span class="sub-text-edit"><textarea class="sub-textarea">' + __escapeHtml(orig.text) + '</textarea></span>';
+    } else {
+        el.innerHTML = '<button class="sub-play-btn" title="在主播放器播放此片段">▶</button>'
+            + '<span class="sub-time">'
+            + '<span class="sub-time-value" data-field="start" title="开始时间">' + formatTime(sub.start) + '</span>'
+            + ' → '
+            + '<span class="sub-time-value" data-field="end" title="结束时间">' + formatTime(sub.end) + '</span>'
+            + '</span>'
+            + '<span class="sub-actions">'
+            + '<button class="sub-edit-btn" title="编辑字幕">编辑</button>'
+            + '<button class="sub-add-btn" title="添加为片段">+</button>'
+            + '</span>'
+            + '<span class="sub-text">' + __escapeHtml(sub.text) + '</span>';
+    }
+    el.__subRefs = {
+        addBtn: el.querySelector('.sub-add-btn'),
+        playBtn: el.querySelector('.sub-play-btn'),
+    };
+    __applySubtitleRowState(i, el);
+    return el;
+}
+
+function __applySubtitleRowState(idx, elArg) {
+    const el = elArg || __subtitleItemEls[idx];
+    if (!el) return;
+    const isVideoActive = __isVideoPreviewActive();
+    const curIdx = (isVideoActive && player && !player.paused) ? __findSubtitleIndex(player.currentTime || 0) : -1;
+    const isActive = idx === curIdx;
+    const isLoading = idx === __audioLoadingIndex;
+    const isPlaying = idx === __audioPlayingIndex && !isLoading;
+    const isAdded = __isSubtitleAddedByIndex(idx);
+
+    el.classList.toggle('active', isActive);
+    el.classList.toggle('playing', isPlaying);
+    el.classList.toggle('loading', isLoading);
+    el.classList.toggle('added', isAdded);
+
+    const refs = el.__subRefs || {};
+    const addBtn = refs.addBtn;
+    if (addBtn) {
+        addBtn.textContent = isAdded ? '−' : '+';
+        addBtn.title = isAdded ? '删除重叠片段' : '添加为片段';
+    }
+    const playBtn = refs.playBtn;
+    if (playBtn) {
+        playBtn.classList.toggle('playing', isPlaying);
+        playBtn.classList.toggle('loading', isLoading);
+        playBtn.textContent = isLoading ? '⋯' : (isPlaying ? '■' : '▶');
+        playBtn.title = isLoading ? '加载中…' : (isPlaying ? '停止播放' : (isVideoActive ? '播放此片段视频' : '播放此片段音频'));
+    }
+}
+
+function __refreshSubtitleRowsForIndexes() {
+    const seen = new Set();
+    for (let i = 0; i < arguments.length; i++) {
+        const idx = Number(arguments[i]);
+        if (!Number.isFinite(idx) || idx < 0 || idx >= __subtitleData.length || seen.has(idx)) continue;
+        seen.add(idx);
+        __applySubtitleRowState(idx);
+    }
+}
+
+function __refreshVisibleSubtitleRows() {
+    for (let i = __subtitleVirtualStart; i < __subtitleVirtualEnd; i++) {
+        __applySubtitleRowState(i);
+    }
+}
+
+function __rerenderSubtitleRow(idx) {
+    const oldEl = __subtitleItemEls[idx];
+    if (!oldEl || !oldEl.parentNode) return false;
+    const nextEl = __createSubtitleItemEl(idx);
+    oldEl.replaceWith(nextEl);
+    __subtitleItemEls[idx] = nextEl;
+    return true;
+}
+
+function __scrollSubtitleIndexIntoView(idx, behavior) {
+    if (!subtitleListContainer || idx < 0 || idx >= __subtitleData.length) return;
+    const targetTop = Math.max(0, idx * SUBTITLE_VIRTUAL_ROW_HEIGHT - subtitleListContainer.clientHeight / 2 + SUBTITLE_VIRTUAL_ROW_HEIGHT / 2);
+    try {
+        subtitleListContainer.scrollTo({ top: targetTop, behavior: behavior || 'auto' });
+    } catch (e) {
+        subtitleListContainer.scrollTop = targetTop;
+    }
+}
+
+function __buildSubtitleItemEls() {
+    __resetSubtitleVirtualList();
+    __renderSubtitleList();
 }
 
 function __renderSubtitleList() {
     if (!subtitleListContainer || !__subtitleData.length) return;
-    __subtitleLastListHighlight = -1;
+    __ensureSubtitleVirtualScrollBound();
+    __ensureSubtitleAddedCache();
+
     const total = __subtitleData.length;
-
-    if (!__subtitleListInited || __subtitleItemEls.length !== total) {
-        __buildSubtitleItemEls();
+    const range = __getSubtitleVisibleRange();
+    const start = range.start;
+    const end = range.end;
+    if (__subtitleListInited && start === __subtitleVirtualStart && end === __subtitleVirtualEnd) {
+        __refreshVisibleSubtitleRows();
+        return;
     }
 
-    const curIdx = __isVideoPreviewActive() ? __findSubtitleIndex(player.currentTime || 0) : -1;
-    const playingIdx = __audioPlayingIndex;
-    const loadingIdx = __audioLoadingIndex;
-
-    for (let i = 0; i < total; i++) {
-        const el = __subtitleItemEls[i];
-        if (!el) continue;
-        const sub = __subtitleData[i];
-        const isActive = (i === curIdx) && player && !player.paused;
-        const isLoading = (i === loadingIdx);
-        const isPlaying = (i === playingIdx) && !isLoading;
-        const isAdded = __isSubtitleOverlappingExisting(sub.start, sub.end);
-
-        el.classList.toggle('active', isActive);
-        el.classList.toggle('playing', isPlaying);
-        el.classList.toggle('loading', isLoading);
-        el.classList.toggle('added', isAdded);
-
-        const btn = el.querySelector('.sub-add-btn');
-        if (btn) {
-            btn.textContent = isAdded ? '−' : '+';
-            btn.title = isAdded ? '删除重叠片段' : '添加为片段';
-        }
-
-        const playBtn = el.querySelector('.sub-play-btn');
-        if (playBtn) {
-            playBtn.classList.toggle('playing', isPlaying);
-            playBtn.classList.toggle('loading', isLoading);
-            playBtn.textContent = isLoading ? '⋯' : (isPlaying ? '■' : '▶');
-            playBtn.title = isLoading ? '加载中…' : (isPlaying ? '停止播放' : (__isVideoPreviewActive() ? '播放此片段视频' : '播放此片段音频'));
-        }
+    __subtitleItemEls = [];
+    __subtitleVirtualStart = start;
+    __subtitleVirtualEnd = end;
+    const fragment = document.createDocumentFragment();
+    const topSpacer = document.createElement('div');
+    topSpacer.className = 'subtitle-virtual-spacer';
+    topSpacer.style.height = `${start * SUBTITLE_VIRTUAL_ROW_HEIGHT}px`;
+    fragment.appendChild(topSpacer);
+    for (let i = start; i < end; i++) {
+        const el = __createSubtitleItemEl(i);
+        fragment.appendChild(el);
+        __subtitleItemEls[i] = el;
     }
+    const bottomSpacer = document.createElement('div');
+    bottomSpacer.className = 'subtitle-virtual-spacer';
+    bottomSpacer.style.height = `${Math.max(0, total - end) * SUBTITLE_VIRTUAL_ROW_HEIGHT}px`;
+    fragment.appendChild(bottomSpacer);
+    subtitleListContainer.replaceChildren(fragment);
+    __subtitleListInited = true;
 }
 
 // 事件委托（单监听器，避免每项独立 addEventListener）
@@ -6771,8 +6922,8 @@ async function __playSubtitleVideoSegmentWithEdit(idx) {
     const startInput = item.querySelector('.sub-time-input[data-field="start"]');
     const endInput = item.querySelector('.sub-time-input[data-field="end"]');
     if (!startInput || !endInput) return;
-    const start = parseTime(startInput.value);
-    const end = parseTime(endInput.value);
+    const start = parseTimeSub(startInput.value);
+    const end = parseTimeSub(endInput.value);
     if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return;
     await __playSubtitleSegment(idx, start, end);
 }
@@ -6781,9 +6932,8 @@ async function __playSubtitleVideoSegment(idx) {
     if (idx < 0 || idx >= __subtitleData.length) return;
     const sub = __subtitleData[idx];
     if (!currentVideoName) return;
-    await __ensureVideoFps();
-    const start = __roundClipTime(sub.start);
-    const end = __roundClipTime(sub.end);
+    const start = roundToMs(sub.start);
+    const end = roundToMs(sub.end);
     if (start >= end) return;
     await __playSubtitleSegment(idx, start, end);
 }
@@ -6793,12 +6943,16 @@ async function __playSubtitleSegment(idx, start, end) {
     if (__isVideoPreviewActive()) {
         if (__framePlayerActive && __framePlayer && __framePlayer.ready) {
             if (__audioPlayingIndex === idx && __framePlayer.playing) {
+                const prevPlaying = __audioPlayingIndex;
+                const prevLoading = __audioLoadingIndex;
                 __framePlayer.pause();
                 __audioPlayingIndex = -1;
                 __audioSegmentEnd = 0;
-                __renderSubtitleList();
+                __refreshSubtitleRowsForIndexes(prevPlaying, prevLoading);
                 return;
             }
+            const prevPlaying = __audioPlayingIndex;
+            const prevLoading = __audioLoadingIndex;
             if (__audioPlayingIndex >= 0) {
                 __framePlayer.pause();
                 __audioPlayingIndex = -1;
@@ -6811,18 +6965,22 @@ async function __playSubtitleSegment(idx, start, end) {
             const startFrame = Math.round(start * fps);
             const endFrame = Math.round(end * fps);
             __framePlayer.play(startFrame, endFrame);
-            __renderSubtitleList();
+            __refreshSubtitleRowsForIndexes(prevPlaying, prevLoading, idx);
             return;
         }
 
         // 视频预览模式：控制 video player
         if (__audioPlayingIndex === idx && player && !player.paused) {
+            const prevPlaying = __audioPlayingIndex;
+            const prevLoading = __audioLoadingIndex;
             player.pause();
             __audioPlayingIndex = -1;
             __audioSegmentEnd = 0;
-            __renderSubtitleList();
+            __refreshSubtitleRowsForIndexes(prevPlaying, prevLoading);
             return;
         }
+        const prevPlaying = __audioPlayingIndex;
+        const prevLoading = __audioLoadingIndex;
         if (__audioPlayingIndex >= 0) {
             player.pause();
             __audioPlayingIndex = -1;
@@ -6844,12 +7002,12 @@ async function __playSubtitleSegment(idx, start, end) {
                     __audioPlayingIndex = -1;
                     __audioSegmentEnd = 0;
                 }
-                __renderSubtitleList();
+                __refreshSubtitleRowsForIndexes(segIdx);
                 return;
             }
             __videoSegmentRafId = requestAnimationFrame(rafLoop);
         })();
-        __renderSubtitleList();
+        __refreshSubtitleRowsForIndexes(prevPlaying, prevLoading, idx);
         return;
     }
 
@@ -6863,6 +7021,8 @@ async function __playSubtitleSegment(idx, start, end) {
     if (!(await __ensureAudioSourceForVideo(currentVideoName))) return;
     if (!audioPlayer) return;
 
+    const prevPlaying = __audioPlayingIndex;
+    const prevLoading = __audioLoadingIndex;
     __audioPlayingIndex = idx;
     __audioLoadingIndex = idx;
     __audioSegmentEnd = end;
@@ -6881,7 +7041,7 @@ async function __playSubtitleSegment(idx, start, end) {
             audioPlayer.removeEventListener('playing', onPlaying);
             __audioPendingPlaying = null;
             __audioLoadingIndex = -1;
-            __renderSubtitleList();
+            __refreshSubtitleRowsForIndexes(idx);
 
             audioPlayer.onpause = function () {
                 if (token === __audioPlaybackToken) __onAudioSegmentEnd();
@@ -6929,11 +7089,13 @@ async function __playSubtitleSegment(idx, start, end) {
         audioPlayer.addEventListener('loadedmetadata', onLoaded);
         try { audioPlayer.load(); } catch (e) { }
     }
-    __renderSubtitleList();
+    __refreshSubtitleRowsForIndexes(prevPlaying, prevLoading, idx);
 }
 
 function __onAudioSegmentEnd() {
     const wasPlaying = __audioPlayingIndex >= 0;
+    const prevPlaying = __audioPlayingIndex;
+    const prevLoading = __audioLoadingIndex;
     __audioPlayingIndex = -1;
     __audioLoadingIndex = -1;
     __audioSegmentEnd = 0;
@@ -6952,11 +7114,13 @@ function __onAudioSegmentEnd() {
         audioPlayer.onended = null;
         audioPlayer.pause();
     }
-    if (wasPlaying) __renderSubtitleList();
+    if (wasPlaying) __refreshSubtitleRowsForIndexes(prevPlaying, prevLoading);
 }
 
 function __stopAudioPlayback() {
     try { __stopAllAudioPreviewPlayback(false); } catch (e) { }
+    const prevPlaying = __audioPlayingIndex;
+    const prevLoading = __audioLoadingIndex;
     __audioPlayingIndex = -1;
     __audioLoadingIndex = -1;
     __audioSegmentEnd = 0;
@@ -6975,7 +7139,7 @@ function __stopAudioPlayback() {
         audioPlayer.onended = null;
         audioPlayer.pause();
     }
-    __renderSubtitleList();
+    __refreshSubtitleRowsForIndexes(prevPlaying, prevLoading);
 }
 
 async function __addSubtitleAsClip(idx) {
@@ -6990,9 +7154,6 @@ async function __addSubtitleAsClip(idx) {
         return;
     }
 
-    // 确保 FPS 已加载，以便 __roundClipTime 使用正确的帧率
-    await __ensureVideoFps();
-
     var task = null;
     for (var i = 0; i < videoTasks.length; i++) {
         if (videoTasks[i].name === currentVideoName) {
@@ -7005,8 +7166,8 @@ async function __addSubtitleAsClip(idx) {
         videoTasks.push(task);
     }
 
-    var roundedStart = __roundClipTime(sub.start);
-    var roundedEnd = __roundClipTime(sub.end);
+    var roundedStart = roundToMs(sub.start);
+    var roundedEnd = roundToMs(sub.end);
     var mergeClipIndexes = [];
     var mergedStart = roundedStart;
     var mergedEnd = roundedEnd;
@@ -7134,6 +7295,7 @@ __saveClipToolState();
 // ---------- 字幕编辑模式 ----------
 function __enterSubtitleEditMode(idx) {
     if (idx < 0 || idx >= __subtitleData.length) return;
+    const prevEditing = __subtitleEditingIndex;
     if (__subtitleEditingIndex >= 0) {
         __cancelSubtitleEdit();
     }
@@ -7143,16 +7305,21 @@ function __enterSubtitleEditMode(idx) {
         end: __subtitleData[idx].end,
         text: __subtitleData[idx].text,
     };
-    __buildSubtitleItemEls();
-    __renderSubtitleList();
+    if (!__rerenderSubtitleRow(idx)) {
+        __scrollSubtitleIndexIntoView(idx, 'auto');
+        __renderSubtitleList();
+    }
+    __refreshSubtitleRowsForIndexes(prevEditing, idx);
 }
 
 function __cancelSubtitleEdit() {
     if (__subtitleEditingIndex < 0) return;
+    const prevEditing = __subtitleEditingIndex;
     __subtitleEditingIndex = -1;
     __subtitleEditOrigData = null;
-    __buildSubtitleItemEls();
-    __renderSubtitleList();
+    if (!__rerenderSubtitleRow(prevEditing)) {
+        __renderSubtitleList();
+    }
 }
 
 async function __deleteSubtitleEntry(idx) {
@@ -7183,9 +7350,8 @@ async function __deleteSubtitleEntry(idx) {
         }
         __subtitleEditingIndex = -1;
         __subtitleEditOrigData = null;
-        __subtitleListInited = false;
-        __subtitleItemEls = [];
-        __buildSubtitleItemEls();
+        __subtitleAddedCacheKey = '';
+        __resetSubtitleVirtualList();
         __renderSubtitleList();
         showToast('字幕已删除', 'success');
     } catch (e) {
@@ -7226,15 +7392,12 @@ async function __saveSubtitleEdit(idx) {
         return;
     }
 
-    // 确保 FPS 已加载，以便 __roundClipTime 使用正确的帧率
-    await __ensureVideoFps();
-
     try {
         const resp = await fetch('/api/subtitle/' + encodeURIComponent(currentVideoName), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                edits: [{ index: idx, start: __roundClipTime(newStart), end: __roundClipTime(newEnd), text: newText }],
+                edits: [{ index: idx, start: roundToMs(newStart), end: roundToMs(newEnd), text: newText }],
             }),
         });
         if (!resp.ok) {
@@ -7251,10 +7414,10 @@ async function __saveSubtitleEdit(idx) {
         }
         __subtitleEditingIndex = -1;
         __subtitleEditOrigData = null;
-        __subtitleListInited = false;
-        __subtitleItemEls = [];
-        __buildSubtitleItemEls();
-        __renderSubtitleList();
+        __subtitleAddedCacheKey = '';
+        if (!__rerenderSubtitleRow(idx)) {
+            __renderSubtitleList();
+        }
         showToast('字幕已保存', 'success');
     } catch (e) {
         showToast('保存失败: ' + (e.message || e), 'error');
@@ -7272,26 +7435,17 @@ if (player) {
 
         var idx = __findSubtitleIndex(player.currentTime);
         if (idx !== __subtitleLastListHighlight) {
+            var prevIdx = __subtitleLastListHighlight;
             __subtitleLastListHighlight = idx;
             if (!player.paused) {
-                var items = subtitleListContainer.querySelectorAll('.subtitle-list-item');
-                items.forEach(function (el) {
-                    var elIdx = parseInt(el.dataset.subtitleIndex || '-1', 10);
-                    el.classList.toggle('active', elIdx === idx);
-                });
+                __refreshSubtitleRowsForIndexes(prevIdx, idx);
             }
             if (idx >= 0 && __audioPlayingIndex < 0 && !player.paused) {
                 // 防抖：边界处避免频繁滚动，等 300ms 再居中
                 if (__subtitleScrollDebounce) clearTimeout(__subtitleScrollDebounce);
                 __subtitleScrollDebounce = setTimeout(function () {
                     if (__subtitleLastListHighlight !== idx) return;
-                    var activeEl = subtitleListContainer.querySelector('.subtitle-list-item.active');
-                    if (activeEl) {
-                        var containerRect = subtitleListContainer.getBoundingClientRect();
-                        var elRect = activeEl.getBoundingClientRect();
-                        var targetTop = subtitleListContainer.scrollTop + (elRect.top - containerRect.top) - containerRect.height / 2 + elRect.height / 2;
-                        subtitleListContainer.scrollTo({ top: targetTop, behavior: 'smooth' });
-                    }
+                    __scrollSubtitleIndexIntoView(idx, 'smooth');
                 }, 300);
             }
         }
@@ -7302,10 +7456,8 @@ if (player) {
 var __origLoadSubtitle = __loadSubtitle;
 __loadSubtitle = async function () {
     await __origLoadSubtitle();
-    // 确保 FPS 已加载，保证字幕列表和片段列表使用相同的帧率渲染
-    await __ensureVideoFps();
-    __subtitleItemEls = [];
-    __subtitleListInited = false;
+    __resetSubtitleVirtualList();
+    __subtitleAddedCacheKey = '';
     if (__subtitleEnabled && __subtitleData.length > 0) {
         __stopAudioPlayback();
         __audioSrc = null;
