@@ -7,24 +7,23 @@ source_backup="/rec"
 # 读取配置文件
 source /rec/config.conf
 
-# 定义需要检查的库及其apt包名
-declare -A libraries
-libraries=(
-  ["numpy"]="python3-numpy"
-  ["matplotlib"]="python3-matplotlib"
-  ["scipy"]="python3-scipy"
-)
 
 # 生成压制弹幕版上传描述的函数
 generate_upload_desc() {
   local stream_title="$1"
   local formatted_start_time_2="$2"
+  local danmaku_count="$3"
+  local cover_time="$4"
+  local cover_p="$5"
 
-  # 使用配置中的模板并替换占位符
-  # {title} 为直播标题，{platform} 为录制平台
   echo "$UPLOAD_DESC_TEMPLATE" | sed \
     -e "s/{title}/$stream_title/g" \
-    -e "s/{platform}/$recording_platform/g"
+    -e "s/{platform}/$recording_platform/g" \
+    -e "s/{danmaku_count}/$danmaku_count/g" \
+    -e "s/{cover_time}/$cover_time/g" \
+    -e "s/{cover_p}/$cover_p/g" \
+    -e "/^弹幕总数：0$/d" \
+    -e "/^封面时间：.*P 0$/d"
 }
 
 # 引入日志函数库
@@ -32,28 +31,6 @@ export LOG_BASE_DIR="/rec/logs"
 source "/rec/脚本/log.sh"
 
 log info "脚本开始执行"
-
-# 安装ffmpeg
-if ! command -v ffmpeg &> /dev/null; then
-  log info "检测到系统未安装 ffmpeg，开始安装..."
-  if ! apt install -y ffmpeg; then
-    log error "安装 ffmpeg 失败，脚本退出"
-    exit 1
-  else
-    log success "ffmpeg 安装成功"
-  fi
-fi
-
-# 安装wget
-if ! command -v wget &> /dev/null; then
-  log info "检测到系统未安装 wget，开始安装..."
-  if ! apt install -y wget; then
-    log error "安装 wget 失败，脚本退出"
-    exit 1
-  else
-    log success "wget 安装成功"
-  fi
-fi
 
 # 检查 source_folders 中的文件夹是否存在，不存在则创建,防止脚本报错
 for source_folder in "${source_folders[@]}"; do
@@ -143,8 +120,8 @@ else
                 mv "$file" "$cache_dir/" || upload_success=false
                 ;;
             flv)
-                # 如果配置禁用转换，则直接移动原文件
-                if [[ "$CONVERT_FLV_TO_MP4" != "true" ]]; then
+                # 如果未启用弹幕压制且配置禁用转换，则直接移动原文件
+                if [[ "$CONVERT_FLV_TO_MP4" != "true" && "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
                     log info "配置禁用 flv 转换，直接移动原文件: $file"
                     mv "$file" "$cache_dir/" || upload_success=false
                     continue
@@ -198,6 +175,7 @@ else
     # 声明数组，用于存储上传到B站视频的文件名
     compressed_files=()
     original_files=()
+    audio_files=()
 
     # 处理从临时目录获取的文件路径
     mapfile -d '' -t input_files < <(find "$cache_dir" -type f -print0 | sort -z)
@@ -240,21 +218,6 @@ else
     log info "录制平台: $recording_platform"
     log info "主播名称: $streamer_name"
 
-    # 投稿
-    if [[ "$streamer_name" == "括弧笑bilibili" && " ${update_servers[*]} " == *" $recording_platform "* ]]; then
-      log info "开始投稿准备"
-      # 安装xz工具
-      if ! command -v xz &> /dev/null; then
-        log info "检测到系统未安装 xz-utils，开始安装..."
-        if ! apt install -y xz-utils; then
-          log error "安装 xz-utils 失败，脚本退出"
-          exit 1
-        else
-          log success "xz-utils 安装成功"
-        fi
-      fi
-    fi
-
     for video_file in "${input_files[@]}"; do
       if [[ -f "$video_file" ]]; then
         # 获取文件名（不带路径）
@@ -281,33 +244,9 @@ else
               if grep -aEq '^\s*<(d|sc|gift|guard)' "${cache_dir}/${xml_file}"; then
                 log info "检测到有效弹幕文件，开始弹幕压制：${cache_dir}"
 
-                # 检查 Intel 显卡驱动安装
-                if lspci | grep -i "VGA\|Display" | grep -i "Intel Corporation" > /dev/null; then
-                  if ! vainfo > /dev/null 2>&1; then
-                    log info "检测到Intel显卡驱动未安装，开始安装..."
-                    apt update
-                    apt install -y gpg wget
-                    wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
-                    echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
-                    apt update
-                    apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
-                    log success "Intel显卡驱动安装完成"
-                  fi
-                fi
-
-                for lib in "${!libraries[@]}"; do
-                  if ! python3 -c "import $lib" &> /dev/null; then
-                    if apt install -y "${libraries[$lib]}"; then
-                      log success "安装Python库 ${libraries[$lib]} 成功"
-                    else
-                      log error "安装Python库 ${libraries[$lib]} 失败"
-                      upload_success=false
-                    fi
-                  fi
-                done
-                # 如果未启用弹幕压制或者关闭了 flv->mp4 转换，视为禁用弹幕压制
-                if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" || "$CONVERT_FLV_TO_MP4" != "true" ]]; then
-                  log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY CONVERT_FLV_TO_MP4=$CONVERT_FLV_TO_MP4），跳过压制"
+                # 如果未启用弹幕压制，视为禁用弹幕压制
+                if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
+                  log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY），跳过压制"
                   compressed_files+=("${cache_dir}/${filename}")  # 直接添加原视频路径
                 else
                   if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}"; then
@@ -346,8 +285,6 @@ else
     if [[ "$streamer_name" == "括弧笑bilibili" && " ${update_servers[*]} " == *" $recording_platform "* ]]; then
       # 构建视频标题（优化样式：日期 + 标题，标题用中括号包裹）
       upload_title_1="${formatted_start_time_4} [${stream_title}]"
-      # 构建视频简介
-      upload_desc_1=$(generate_upload_desc "$stream_title" "$formatted_start_time_2")
       
       if [[ "$ENABLE_VIDEO_UPLOAD" != "true" ]]; then
         log warn "上传已被禁用，跳过投稿步骤"
@@ -355,9 +292,16 @@ else
       else
         log info "开始上传视频：${compressed_files[@]}"
         # 正常发布
-        # 封面获取
-        biliup_cover_image=$(python3 /rec/脚本/封面获取.py "$cache_dir")
+        # 视频信息获取及弹幕/封面信息（JSON格式）
+        cover_json=$(python3 /rec/脚本/视频信息获取.py "$cache_dir")
+        biliup_cover_image=$(echo "$cover_json" | jq -r '.cover_path')
+        danmaku_count=$(echo "$cover_json" | jq -r '.danmaku_count')
+        cover_timestamp=$(echo "$cover_json" | jq -r '.cover_time')
+        cover_p_num=$(echo "$cover_json" | jq -r '.cover_p')
         log info "获取封面图片路径：$biliup_cover_image"
+        log info "弹幕总数：${danmaku_count:-0}，封面时间节点：${cover_timestamp:-0}，所在分P：${cover_p_num:-0}"
+
+        upload_desc_1=$(generate_upload_desc "$stream_title" "$formatted_start_time_2" "${danmaku_count:-0}" "${cover_timestamp:-0}" "${cover_p_num:-0}")
 
         # === 新增：检测封面文件是否存在 ===
         cover_args=() # 初始化一个空数组
@@ -422,10 +366,54 @@ else
         mv "${cache_dir}"/*.xml "$target_dir" 2>/dev/null
 
         log info "备份完成：源文件已移动到 $target_dir"
+
+        # =============================
+        # 提取原始视频的音频
+        # =============================
+        if [[ "$ENABLE_ASR_SUBMIT" == "true" || "$ENABLE_AUDIO_EXTRACT" == "true" ]]; then
+          log info "开始从原始视频中提取音频"
+          for video_file in "$target_dir"*.mp4 "$target_dir"*.flv; do
+            if [[ -f "$video_file" ]]; then
+              audio_file="${video_file%.*}.aac"
+              log info "提取音频: $video_file -> $audio_file"
+              if ffmpeg -i "$video_file" -vn -c:a copy -loglevel error -y "$audio_file"; then
+                log success "音频提取成功: $audio_file"
+                audio_files+=("$audio_file")
+              else
+                log error "音频提取失败: $video_file"
+              fi
+            fi
+          done
+        fi
+
+        # =============================
+        # 提交音频到语音识别后端
+        # =============================
+        if [[ "$ENABLE_ASR_SUBMIT" == "true" && "${#audio_files[@]}" -gt 0 ]]; then
+          ASR_SERVER="${ASR_SERVER:-192.168.50.5}"
+          ASR_PORT="${ASR_PORT:-8286}"
+          log info "提交 ${#audio_files[@]} 个音频文件到语音识别后端 ${ASR_SERVER}:${ASR_PORT}"
+          for audio_file in "${audio_files[@]}"; do
+            log info "提交语音识别任务: $audio_file"
+            remote_path=$(echo "$audio_file" | sed \
+              -e 's|/|\\|g' \
+              -e "s|^\\\\rec\\\\videos|$ASR_REMOTE_PATH|" \
+              -e 's|\\|\\\\|g')
+            log info "远程路径: $remote_path"
+            response=$(curl -s --connect-timeout 5 --max-time 5 -X POST "http://${ASR_SERVER}:${ASR_PORT}/submit_task" \
+              -H "Content-Type: application/json" \
+              -d "{\"audio_path\": \"$remote_path\", \"device\": \"auto\"}")
+            if echo "$response" | grep -q "task_id"; then
+              task_id=$(echo "$response" | grep -o '"task_id":"[^"]*"' | cut -d'"' -f4)
+              log success "语音识别任务已提交: $task_id"
+            else
+              log error "语音识别任务提交失败: $response"
+            fi
+          done
+        fi
       else
         log info "未找到源文件，跳过备份源文件"
       fi
-
 
       # =============================
       # 清理临时文件
