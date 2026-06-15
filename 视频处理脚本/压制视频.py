@@ -21,7 +21,7 @@ CONFIG = {
     'ENCODE': {
         # 正式版 (投稿版) - 高质量设置
         'MAIN_CRF': '21',           # CPU (x264) CRF 质量值 (越小画质越好，建议 18-23)
-        'MAIN_PRESET': 'fast',      # CPU (x264) 预设 (medium/fast/faster，越慢压缩率越高)
+        'MAIN_PRESET': 'veryfast',  # CPU (x264) 预设 (medium/fast/faster/veryfast，越慢压缩率越高)
         'QSV_QUALITY': '20',        # GPU (QSV) ICQ 质量值 (越小画质越好)
         'QSV_PRESET': 'medium',     # GPU (QSV) 预设 (medium/veryfast)
         
@@ -440,17 +440,20 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
         ]
         
         if encoder == 'libx264':
+            cpu_count = multiprocessing.cpu_count()
             if is_preview:
                 # 预览版本 (读配置)
                 args.extend(['-crf', CONFIG['ENCODE']['PREVIEW_CRF'], 
                              '-profile:v', 'main', 
                              '-preset', CONFIG['ENCODE']['PREVIEW_PRESET'], 
-                             '-tune', 'fastdecode'])
+                             '-tune', 'fastdecode',
+                             '-threads', str(cpu_count)])
             else:
                 # 正式版本 (读配置)
                 args.extend(['-crf', CONFIG['ENCODE']['MAIN_CRF'], 
                              '-profile:v', 'high', 
-                             '-preset', CONFIG['ENCODE']['MAIN_PRESET']])
+                             '-preset', CONFIG['ENCODE']['MAIN_PRESET'],
+                             '-threads', str(cpu_count)])
                 
         elif encoder == 'h264_qsv':
             if is_preview:
@@ -540,11 +543,35 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
             """格式化秒数为可读时间"""
             return str(timedelta(seconds=int(seconds)))
         
+        # 跟踪上一条进度内容，用于替换
+        _last_progress_entry = None
+
+        def _replace_last_progress(new_entry):
+            """替换上一条进度条目（仅保留最新一条，追加到末尾）"""
+            nonlocal _last_progress_entry
+            try:
+                log_file.flush()
+                path = log_file.name
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                if _last_progress_entry and _last_progress_entry in content:
+                    content = content.replace(_last_progress_entry, '', 1)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                    f.write(new_entry)
+                _last_progress_entry = new_entry
+            except Exception:
+                try:
+                    log_file.write(new_entry)
+                    log_file.flush()
+                except Exception:
+                    pass
+
+        # 存储最近的几行输出，以便在出错时打印调试信息（放在外部作用域，read_output 和错误处理都能访问）
+        recent_lines = deque(maxlen=20)
+
         def read_output():
             last_log_time = 0
-            
-            # 存储最近的几行输出，以便在出错时打印调试信息
-            recent_lines = deque(maxlen=20)
             
             for line in iter(process.stdout.readline, ''):
                 # 缓存最近输出
@@ -583,9 +610,9 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
                                         eta_seconds = remaining_video / current_speed
                                         eta_text = format_time(eta_seconds)
                                 
-                                # 写入更加人性化的进度行到日志
-                                log_file.write(f"\n>>> ⏳ 进度: {percentage:5.1f}% | 剩余时间(动态预估): {eta_text} | 速度: {progress.get('speed', 'N/A')} <<<\n\n")
-                                log_file.flush()
+                                # 写入进度（替换上一条，保持只有最新一条）
+                                progress_entry = f"\n>>> ⏳ 进度: {percentage:5.1f}% | 剩余时间(动态预估): {eta_text} | 速度: {progress.get('speed', 'N/A')} <<<\n\n"
+                                _replace_last_progress(progress_entry)
                                 last_log_time = now
         
         # 启动输出读取线程
@@ -601,27 +628,28 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
             
             # 记录完成信息到日志
             if log_file:
-                # 如果返回码不为0，说明可能出错，打印缓存在最近的原始日志
                 if process.returncode != 0:
                     log_file.write("\n" + "!" * 70 + "\n")
                     log_file.write(f"⚠️  FFmpeg 异常退出 (Return Code: {process.returncode})\n")
-                    log_file.write("最后 20 行 FFmpeg 输出:\n")
-                    log_file.write("-" * 30 + "\n")
-                    # 由于 read_output 在线程中运行，我们可能需要在这里访问 saved lines?
-                    # 实际上线程可能已经退出了。为了简单起见，我们只能假设日志里已经有了（并不，我们删了）
-                    # 这是一个权衡。如果用户不需要详细日志，那么出错时确实会缺少信息。
-                    # 改进方案：我们还是得把 recent_lines 传出来。
-                    # 但由于 python 闭包特性，我们可以在外部定义一个 deque
-                    pass
-                
-                log_file.write("\n" + "=" * 70 + "\n")
-                log_file.write(f"✅ 压制完成\n")
-                log_file.write(f"总耗时: {format_time(total_time)}\n")
-                log_file.write(f"视频时长: {format_time(video_duration)}\n")
-                if total_time > 0 and video_duration > 0:
-                    speed_ratio = video_duration / total_time
-                    log_file.write(f"平均速度: {speed_ratio:.2f}x\n")
-                log_file.write("=" * 70 + "\n")
+                    if recent_lines:
+                        log_file.write("最后 20 行 FFmpeg 输出:\n")
+                        log_file.write("-" * 30 + "\n")
+                        for line in recent_lines:
+                            log_file.write(line)
+                        log_file.write("-" * 30 + "\n")
+                    log_file.write("\n" + "=" * 70 + "\n")
+                    log_file.write(f"❌ FFmpeg 执行出错\n")
+                    log_file.write(f"已运行时间: {format_time(total_time)}\n")
+                    log_file.write("=" * 70 + "\n")
+                else:
+                    log_file.write("\n" + "=" * 70 + "\n")
+                    log_file.write(f"✅ 压制完成\n")
+                    log_file.write(f"总耗时: {format_time(total_time)}\n")
+                    log_file.write(f"视频时长: {format_time(video_duration)}\n")
+                    if total_time > 0 and video_duration > 0:
+                        speed_ratio = video_duration / total_time
+                        log_file.write(f"平均速度: {speed_ratio:.2f}x\n")
+                    log_file.write("=" * 70 + "\n")
                 log_file.flush()
             
             return process.returncode
@@ -684,7 +712,6 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
         log_file.write("=" * 70 + "\n")
         log_file.write("FFmpeg 压制进度日志\n")
         log_file.write("=" * 70 + "\n")
-        log_file.write(f"开始时间: {os.popen('echo %date% %time%').read().strip()}\n")
         log_file.write(f"编码方式: QSV 硬件加速（优先）\n")
         if output_without_bar:
             log_file.write(f"输出文件 (投稿版， 无进度条): {output_without_bar}\n")
@@ -707,7 +734,6 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
                 log_file.write("=" * 70 + "\n")
                 log_file.write("FFmpeg 压制进度日志\n")
                 log_file.write("=" * 70 + "\n")
-                log_file.write(f"开始时间: {os.popen('echo %date% %time%').read().strip()}\n")
                 log_file.write(f"编码方式: CPU 软件编码 (QSV 失败)\n")
                 if output_without_bar:
                     log_file.write(f"输出文件 (投稿版， 无进度条): {output_without_bar}\n")
@@ -719,23 +745,19 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
 
     # 输出最终状态和文件信息
     
-        if final_result == 0:
-            if log_file:
+        if log_file:
+            if final_result == 0:
                 log_file.write("\n" + "=" * 70 + "\n")
                 log_file.write("✅ 压制完成！\n")
-            print(f"\n{'='*70}", file=log_file)
-            print(f"✅ 压制完成！", file=log_file)
-            print(f"{'='*70}", file=log_file)
-            print(f"📁 输出文件:", file=log_file)
-            if output_without_bar:
-                print(f"   • 【投稿版】 {output_without_bar}", file=log_file)
-            if output_preview:
-                print(f"   • 【网页预览】 {output_preview} (480p, 24fps, 质量优先)", file=log_file)
-            print(f"{'='*70}\n", file=log_file)
-        else:
-            if log_file:
+                log_file.write("📁 输出文件:\n")
+                if output_without_bar:
+                    log_file.write(f"   • 【投稿版】 {output_without_bar}\n")
+                if output_preview:
+                    log_file.write(f"   • 【网页预览】 {output_preview} (480p, 24fps)\n")
+                log_file.write("=" * 70 + "\n\n")
+            else:
                 log_file.write(f"\n⚠️ 压制失败 (返回码: {final_result})\n")
-                log_file.flush()
+            log_file.flush()
     
     except KeyboardInterrupt:
         if log_file:
@@ -769,9 +791,7 @@ def main(xml_file, mode='both', danmaku_factory='/rec/apps/DanmakuFactory',
     xml_base_for_log = os.path.splitext(os.path.basename(xml_file))[0]
     log_path = os.path.join(base_dir, f"{xml_base_for_log}.log")
 
-    with open(log_path, 'w', encoding='utf-8') as raw_log:
-        # 使用 PrependLogFile 包装器，使最新日志在最上面
-        log_file = PrependLogFile(raw_log)
+    with open(log_path, 'a', encoding='utf-8') as log_file:
         # 保存原始 stdout/stderr
         original_stdout = sys.stdout
         original_stderr = sys.stderr
