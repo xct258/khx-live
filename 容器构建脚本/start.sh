@@ -218,6 +218,21 @@ else
   fi
 fi
 
+# 启动 cookie 自动更新（需 GitHub Token）
+if [ -n "$XCT258_GITHUB_TOKEN" ]; then
+  COOKIE_SCRIPT="/rec/脚本/自动更新cookie.sh"
+  if [ ! -f "$COOKIE_SCRIPT" ]; then
+    COOKIE_SCRIPT="/opt/bililive/scripts/自动更新cookie.sh"
+  fi
+  if [ -f "$COOKIE_SCRIPT" ]; then
+    chmod +x "$COOKIE_SCRIPT"
+    nohup "$COOKIE_SCRIPT" >> /rec/脚本/cookie_sync.log 2>&1 &
+    echo "已启动 cookie 自动更新 + 录播姬配置同步"
+  else
+    echo "未找到 cookie 自动更新脚本: 自动更新cookie.sh" >&2
+  fi
+fi
+
 # 启动 biliup(暂时不使用biliup录制，只用于上传)
 #/rec/biliup/biliup server --auth > /dev/null 2>&1
 

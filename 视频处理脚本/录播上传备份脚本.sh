@@ -249,7 +249,8 @@ else
                   log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY），跳过压制"
                   compressed_files+=("${cache_dir}/${filename}")  # 直接添加原视频路径
                 else
-                  if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}"; then
+                  # --mode clean: 只生成投稿版(无进度条)，不生成预览版(带进度条)。如需预览版改为 --mode both
+                  if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode clean; then
                     if [[ -f "${cache_dir}/${output_file}" ]]; then
                       log success "视频弹幕压制完成：$output_file"
                       compressed_files+=("${cache_dir}/${output_file}")
