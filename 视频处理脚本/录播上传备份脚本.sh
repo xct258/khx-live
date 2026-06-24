@@ -236,46 +236,67 @@ else
             compressed_files+=("${cache_dir}/${filename}")
             original_files+=("${cache_dir}/${filename}")
           else
+            original_files+=("${cache_dir}/${filename}")
             xml_file="${filename_no_ext}.xml"
             ass_file="${filename_no_ext}.ass"
             output_file="投稿版-${filename_no_ext}.mp4"
             if [[ -f "${cache_dir}/${xml_file}" ]]; then
               # 检查 XML 是否包含有效弹幕（通过匹配<d，<sc，<gift，<guard开头的行）
               if grep -aEq '^\s*<(d|sc|gift|guard)' "${cache_dir}/${xml_file}"; then
-                log info "检测到有效弹幕文件，开始弹幕压制：${cache_dir}"
-
-                # 如果未启用弹幕压制，视为禁用弹幕压制
-                if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
-                  log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY），跳过压制"
-                  compressed_files+=("${cache_dir}/${filename}")  # 直接添加原视频路径
+                log info "检测到有效弹幕文件，准备弹幕压制：${cache_dir}"
+                # 通过外部脚本进行时间差校验
+                DIFF_RESULT=$(/rec/脚本/对比视频和弹幕的时长.sh "$video_file" -s 2>/dev/null)
+                # 初始化一个“安全通过”标志，默认为 0（不通过）
+                IS_SAFE_TO_PROCESS=0
+                if [[ -n "$DIFF_RESULT" ]]; then
+                  # 去掉正负号，获取纯数字的绝对值
+                  ABS_DIFF=$(echo "$DIFF_RESULT" | tr -d '+-')
+                  IS_OVER_LIMIT=$(awk -v diff="$ABS_DIFF" -v limit="$MAX_DIFF_LIMIT" 'BEGIN { print (diff > limit) ? 1 : 0 }')
+                  if [[ "$IS_OVER_LIMIT" -eq 1 ]]; then
+                    log warn "时间相差过大（相差 ${DIFF_RESULT} 秒，限制 ${MAX_DIFF_LIMIT} 秒），疑似网络波动，跳过弹幕压制"
+                  else
+                    log success "时间差校验通过（相差 ${DIFF_RESULT} 秒）"
+                    IS_SAFE_TO_PROCESS=1 # 只有拿到明确的成功数据，才标记为安全
+                  fi
                 else
-                  # --mode clean: 只生成投稿版(无进度条)，不生成预览版(带进度条)。如需预览版改为 --mode both
-                  if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode clean; then
-                    if [[ -f "${cache_dir}/${output_file}" ]]; then
-                      log success "视频弹幕压制完成：$output_file"
-                      compressed_files+=("${cache_dir}/${output_file}")
+                  # === 新增安全策略：对比脚本报错或没返回，强制拦截 ===
+                  log error "安全拦截：时间对比脚本未返回任何数据（可能发生错误），为防同步异常，拒绝执行弹幕压制"
+                fi
+                if [[ "$IS_SAFE_TO_PROCESS" -eq 1 ]]; then
+                  log info "开始弹幕压制：${cache_dir}"
+                  # 如果未启用弹幕压制，视为禁用弹幕压制
+                  if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
+                    log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY），跳过压制"
+                    compressed_files+=("${cache_dir}/${filename}")  # 直接添加原视频路径
+                  else
+                    # --mode clean: 只生成投稿版(无进度条)，不生成预览版(带进度条)。如需预览版改为 --mode both
+                    if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode clean; then
+                      if [[ -f "${cache_dir}/${output_file}" ]]; then
+                        log success "视频弹幕压制完成：$output_file"
+                        compressed_files+=("${cache_dir}/${output_file}")
+                      else
+                        log error "压制脚本执行成功但未生成目标文件，使用原视频：$filename"
+                        compressed_files+=("${cache_dir}/${filename}")
+                      fi
                     else
-                      log error "压制脚本执行成功但未生成目标文件，使用原视频：$filename"
+                      log error "视频弹幕压制失败：$output_file"
                       compressed_files+=("${cache_dir}/${filename}")
                     fi
-                  else
-                    log error "视频弹幕压制失败：$output_file"
-                    compressed_files+=("${cache_dir}/${filename}")
                   fi
-                  original_files+=("${cache_dir}/${filename}")
+                else
+                  # 未通过时间检测或脚本报错的分支，统一兜底使用原视频
+                  compressed_files+=("${cache_dir}/${filename}")
                 fi
               else
-                log.warn "弹幕文件内容为空或不符合预期，跳过弹幕压制：${cache_dir}/${xml_file}"
+                log warn "弹幕文件内容为空或不符合预期，跳过弹幕压制：${cache_dir}/${xml_file}"
                 # 添加视频到数组
                 compressed_files+=("${cache_dir}/${filename}")
               fi
             else
-              log.warn "未检测到弹幕 XML 文件，跳过弹幕压制：${cache_dir}/${xml_file}"
+              log warn "未检测到弹幕 XML 文件，跳过弹幕压制：${cache_dir}/${xml_file}"
               # 添加视频到数组
               compressed_files+=("${cache_dir}/${filename}")
             fi
-            # 同时将原始视频文件添加到原始文件数组
-            original_files+=("${cache_dir}/${filename}")
           fi
         fi
       else
