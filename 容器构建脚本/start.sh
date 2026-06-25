@@ -260,24 +260,24 @@ while true; do
   if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
   else
-    echo "配置文件不存在，使用默认设置" >> /rec/录播上传备份脚本.log 2>&1
+    echo "配置文件不存在，使用默认设置" >> /rec/备份脚本执行日志.log 2>&1
     ENABLE_UPLOAD_SCRIPT=false
     SCHEDULE_SLEEP_TIME="$DEFAULT_SLEEP_TIME"
   fi
 
   # 如果未启用，则跳过执行
   if [[ "$ENABLE_UPLOAD_SCRIPT" != "true" ]]; then
-    echo "$(date)" > /rec/录播上传备份脚本.log 2>&1
-    echo "----------------------------" >> /rec/录播上传备份脚本.log 2>&1
-    echo "已禁用上传脚本执行，跳过本次任务。" >> /rec/录播上传备份脚本.log 2>&1
-    echo "----------------------------" >> /rec/录播上传备份脚本.log 2>&1
-    echo "$(date)" >> /rec/录播上传备份脚本.log 2>&1
+    echo "$(date)" > /rec/备份脚本执行日志.log 2>&1
+    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
+    echo "已禁用上传脚本执行，跳过本次任务。" >> /rec/备份脚本执行日志.log 2>&1
+    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
+    echo "$(date)" >> /rec/备份脚本执行日志.log 2>&1
   else
-    echo "$(date)" > /rec/录播上传备份脚本.log 2>&1
-    echo "----------------------------" >> /rec/录播上传备份脚本.log 2>&1
-    /rec/脚本/录播上传备份脚本.sh >> /rec/录播上传备份脚本.log 2>&1
-    echo "----------------------------" >> /rec/录播上传备份脚本.log 2>&1
-    echo "$(date)" >> /rec/录播上传备份脚本.log 2>&1
+    echo "$(date)" > /rec/备份脚本执行日志.log 2>&1
+    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
+    /rec/脚本/录播上传备份脚本.sh >> /rec/备份脚本执行日志.log 2>&1
+    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
+    echo "$(date)" >> /rec/备份脚本执行日志.log 2>&1
   fi
 
   # 计算下次执行时间
