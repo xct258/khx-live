@@ -290,7 +290,7 @@ while true; do
     time_difference=$(( time_difference + 86400 ))  # 加一天
   fi
   wake_time=$(date -d "@$(( $now_ts + $time_difference ))" '+%Y-%m-%d %H:%M:%S')
-  echo "睡眠 $time_difference 秒，预计下次执行时间 $wake_time" >> /rec/录播上传备份脚本.log 2>&1
+  echo "睡眠 $time_difference 秒，预计下次执行时间 $wake_time" >> /rec/备份脚本执行日志.log 2>&1
   sleep $time_difference
 done
 EOF
