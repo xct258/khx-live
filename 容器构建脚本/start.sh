@@ -13,6 +13,23 @@ mkdir -p /rec/apps
 mkdir -p /rec/在线切片
 mkdir -p /rec/在线切片/static
 mkdir -p /rec/在线切片/templates
+
+# ================= 新增：Token 提取与持久化逻辑 =================
+TOKEN_FILE="/app/.github_token"
+
+# 1. 如果环境变量传入了 Token，优先使用并持久化保存到文件
+if [ -n "$XCT258_GITHUB_TOKEN" ]; then
+  echo "$XCT258_GITHUB_TOKEN" > "$TOKEN_FILE"
+  chmod 600 "$TOKEN_FILE" # 设置权限，保护私密信息
+fi
+
+# 2. 统一读取 Token（用于赋值给后续操作，即使容器重启未传环境变量也能读到）
+CURRENT_GITHUB_TOKEN=""
+if [ -f "$TOKEN_FILE" ]; then
+  CURRENT_GITHUB_TOKEN=$(cat "$TOKEN_FILE")
+fi
+# ==============================================================
+
 # 配置文件单独处理
 if [ ! -f /rec/config.conf ]; then
     cp /opt/bililive/config/config.conf /rec/config.conf
@@ -73,7 +90,7 @@ for file in /opt/bililive/apps/*; do
 done
 
 # 下载私有配置文件（需 GitHub Token）
-if [ -n "$XCT258_GITHUB_TOKEN" ]; then
+if [ -n "$CURRENT_GITHUB_TOKEN" ]; then
 
   # 检查是否有文件缺失，只有缺失时才下载
   missing_file=false
@@ -83,7 +100,7 @@ if [ -n "$XCT258_GITHUB_TOKEN" ]; then
   [ ! -f "/rec/cookies/bilibili/cookies-xct258-2.json" ] && missing_file=true
 
   if $missing_file; then
-    echo "检测到 XCT258_GITHUB_TOKEN，正在静默下载私有配置文件..."
+    echo "检测到 CURRENT_GITHUB_TOKEN..."
 
     mkdir -p /root/.config/rclone
     mkdir -p /rec/cookies/bilibili
@@ -91,19 +108,19 @@ if [ -n "$XCT258_GITHUB_TOKEN" ]; then
     download_all_success=true
 
     if [ ! -f "/root/.config/rclone/rclone.conf" ]; then
-      wget --quiet --header="Authorization: token $XCT258_GITHUB_TOKEN" \
+      wget --quiet --header="Authorization: token $CURRENT_GITHUB_TOKEN" \
         -O "/root/.config/rclone/rclone.conf" \
         "https://raw.githubusercontent.com/xct258/Documentation/refs/heads/main/rclone/rclone.conf" || download_all_success=false
     fi
 
     if [ ! -f "/rec/cookies/bilibili/cookies-烦心事远离.json" ]; then
-      wget --quiet --header="Authorization: token $XCT258_GITHUB_TOKEN" \
+      wget --quiet --header="Authorization: token $CURRENT_GITHUB_TOKEN" \
         -O "/rec/cookies/bilibili/cookies-烦心事远离.json" \
         "https://raw.githubusercontent.com/xct258/Documentation/refs/heads/main/b站cookies/cookies-b站-烦心事远离.json" || download_all_success=false
     fi
 
     if [ ! -f "/rec/cookies/bilibili/cookies-xct258-2.json" ]; then
-      wget --quiet --header="Authorization: token $XCT258_GITHUB_TOKEN" \
+      wget --quiet --header="Authorization: token $CURRENT_GITHUB_TOKEN" \
         -O "/rec/cookies/bilibili/cookies-xct258-2.json" \
         "https://raw.githubusercontent.com/xct258/Documentation/refs/heads/main/b站cookies/cookies-b站-xct258-2.json" || download_all_success=false
     fi
@@ -215,21 +232,6 @@ else
     fi
   else
     echo "更新脚本检测异常（exit=$UPDATE_RESULT），保持当前录播姬进程不改动。"
-  fi
-fi
-
-# 启动 cookie 自动更新（需 GitHub Token）
-if [ -n "$XCT258_GITHUB_TOKEN" ]; then
-  COOKIE_SCRIPT="/rec/脚本/自动更新cookie.sh"
-  if [ ! -f "$COOKIE_SCRIPT" ]; then
-    COOKIE_SCRIPT="/opt/bililive/scripts/自动更新cookie.sh"
-  fi
-  if [ -f "$COOKIE_SCRIPT" ]; then
-    chmod +x "$COOKIE_SCRIPT"
-    nohup "$COOKIE_SCRIPT" >> /rec/脚本/cookie_sync.log 2>&1 &
-    echo "已启动 cookie 自动更新 + 录播姬配置同步"
-  else
-    echo "未找到 cookie 自动更新脚本: 自动更新cookie.sh" >&2
   fi
 fi
 

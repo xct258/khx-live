@@ -557,5 +557,7 @@ else
   log info "已禁用自动清理，跳过清理"
 fi
 
+# 自动更新cookies
+/rec自动更新cookie.sh
 
 log info "脚本执行完毕"
