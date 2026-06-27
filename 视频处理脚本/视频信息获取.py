@@ -3,6 +3,7 @@ import os
 import subprocess
 import xml.etree.ElementTree as ET
 import json
+from PIL import Image, ImageStat
 
 def format_seconds(seconds):
     hours = seconds // 3600
@@ -46,21 +47,18 @@ def extract_frame_ffmpeg(video_path, timestamp, output_path):
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return result.returncode == 0
 
-def is_black_frame(image_path):
-    cmd = [
-        'ffmpeg',
-        '-i', image_path,
-        '-vf', 'blackframe=95:2',
-        '-f', 'null',
-        '-'
-    ]
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    return 'black' in result.stderr
+def is_valid_frame(image_path, dark_threshold=20, bright_threshold=235):
+    try:
+        with Image.open(image_path) as img:
+            grayscale_img = img.convert('L')
+            stat = ImageStat.Stat(grayscale_img)
+            mean_brightness = stat.mean[0]
+            if mean_brightness < dark_threshold or mean_brightness > bright_threshold:
+                return False
+                
+            return True
+    except Exception as e:
+        return False
 
 def main():
     result = {
@@ -130,20 +128,28 @@ def main():
 
     ts = peak_time + 0.5
     cover_timestamp = int(ts)
-    while ts >= 0:
+    
+    max_attempts = 10 
+    attempts = 0
+
+    while ts >= 0 and attempts < max_attempts:
         if not extract_frame_ffmpeg(video_path, ts, output_img):
             ts -= 1
+            attempts += 1
             continue
-        if not is_black_frame(output_img):
+            
+        if is_valid_frame(output_img, dark_threshold=25, bright_threshold=230):
             result["cover_path"] = output_img
             result["cover_time"] = format_seconds(cover_timestamp)
             print(json.dumps(result, ensure_ascii=False))
             return
+            
         ts -= 1
         cover_timestamp = int(ts)
+        attempts += 1
 
     if os.path.exists(output_img):
-        os.remove(output_img)
+        pass
 
     print(json.dumps(result, ensure_ascii=False))
 
