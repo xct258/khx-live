@@ -331,9 +331,9 @@ cat << 'EOF' > "$OPENCC_SCHEDULER_SCRIPT"
 #!/bin/bash
 CONFIG_FILE="/rec/config.conf"
 source "$CONFIG_FILE"
-if [[ "$ENABLE_OPENCC" = "true" ]] && [[ -f "/rec/opencc/app.py" ]]; then
+if [[ "$ENABLE_OPENCC" = "true" ]] && [[ -f "/rec/语音识别/app.py" ]]; then
   echo "启动语音识别服务..."
-  python3 /rec/opencc/app.py > /dev/null 2>&1 &
+  python3 /rec/语音识别/app.py > /dev/null 2>&1 &
 fi
 EOF
 chmod +x "$OPENCC_SCHEDULER_SCRIPT"
