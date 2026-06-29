@@ -500,8 +500,8 @@
 
         function formatSegTime(t) {
             const d = new Date(t * 1000);
-            const ms = String(d.getMilliseconds()).padStart(3, '0');
-            return d.toISOString().substring(11, 19) + ',' + ms;
+            const cs = String(Math.floor(d.getMilliseconds() / 10)).padStart(2, '0');
+            return d.toISOString().substring(11, 19) + ',' + cs;
         }
 
         function trimConsole() {
@@ -659,7 +659,7 @@
                     if (serviceModelLoaded) {
                         const statusText = document.getElementById('globalStatusText');
                         if (runningTask) {
-                            statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-running"><span class="pulse-dot-blue"></span>正在转写</span>`;
+                            statusText.innerHTML = `Whisper 智能转写 <span class="status-badge badge-running"><span class="pulse-dot-blue"></span>转写中</span>`;
                             if (runningTask.task_id !== currentTaskId) {
                                 switchTerminal(runningTask.task_id, runningTask.filename);
                             }
@@ -694,15 +694,18 @@
             queue.forEach((item, index) => {
                 const isRunning = item.status === 'running';
                 const safeFilename = escapeHTML(item.filename);
-                const statusStr = isRunning 
-                    ? '<span class="status-running"><span class="spinner spinner-sm"></span> 提取中</span>' 
-                    : `<span>等待中 #${index}</span>`;
+                let statusStr;
+                if (isRunning) {
+                    statusStr = `<span class="status-running">🔊 转写中</span>`;
+                } else {
+                    statusStr = `<span>⏳ 等待中</span>`;
+                }
                 
                 htmlStr += `
                     <div class="list-item ${isRunning ? 'running' : ''}" data-task-id="${item.task_id}">
                         <div class="item-info">
                             <div class="item-name" title="${safeFilename}">${safeFilename}</div>
-                            <div class="item-status">${statusStr} <span style="opacity:0.5">|</span> ID: ${item.task_id.substring(0,6)}</div>
+                            <div class="item-status">${statusStr} <span style="opacity:0.3">|</span> ID: ${item.task_id.substring(0,8)}</div>
                         </div>
                         <button class="btn-kill">中止</button>
                     </div>`;

@@ -9,6 +9,7 @@ html { scroll-behavior: auto; }
     --muted-color: #a0a0a0;
 
     --accent-color: #4f9eff;
+    --accent-text-color: #fff;
     --accent-hover: #3b7fd4;
 
     --panel-bg: rgba(20, 25, 40, 0.6);
@@ -201,7 +202,7 @@ button {
     font-size: 13px;
     border-radius: var(--radius-sm);
     background: var(--btn-bg);
-    color: #fff;
+    color: var(--accent-text-color);
     font-weight: 600;
     border: 1px solid rgba(255, 255, 255, 0.2);
     cursor: pointer;
@@ -851,7 +852,7 @@ button:active {
     bottom: 5px;
 
     font-size: 11px;
-    color: #fff;
+    color: var(--accent-text-color);
     background: var(--accent-color);
     padding: 2px 6px;
     border-radius: 4px;
@@ -1674,27 +1675,37 @@ pre {
     #videoControlsContainer .time-text {
         max-width: 110px;
     }
+
+    #videoControlsContainer .tl-bar-left .time-text {
+        max-width: 110px !important;
+    }
 }
 
 @media (max-width: 360px) {
     #videoControlsContainer .time-text {
         max-width: 90px;
     }
+
+    #videoControlsContainer .tl-bar-left .time-text {
+        max-width: 90px !important;
+    }
 }
 
 .icon-btn {
-    padding: 5px 10px;
+    padding: 4px 8px;
     min-width: 36px;
     text-align: center;
     background: rgba(255, 255, 255, 0.24);
     /* 按钮背景不透明度提高 */
     border-radius: 6px;
     border: 1px solid rgba(255, 255, 255, 0.05);
+    color: #fff;
     font-weight: 600;
 }
 
 .icon-btn:hover {
     background: var(--btn-hover);
+    color: var(--accent-text-color);
 }
 
 .icon-btn.small {
@@ -2373,6 +2384,7 @@ pre {
 
 .modal-btn-primary {
     background: var(--accent-color);
+    color: var(--accent-text-color);
     border-color: transparent;
 }
 
@@ -3394,11 +3406,90 @@ pre {
 }
 
 /* 字幕切片列表 */
+.subtitle-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px;
+    margin-bottom: 10px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.subtitle-toolbar-hint {
+    flex: 1 1 140px;
+    min-width: 0;
+    color: var(--muted-color);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.subtitle-toolbar button {
+    padding: 3px 8px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.subtitle-toolbar button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.subtitle-toolbar button.playing {
+    background: rgba(79, 200, 100, 0.5);
+    animation: subPlayBtnPulse 1.5s ease-in-out infinite;
+}
+
+.subtitle-toolbar button.loading {
+    background: rgba(79, 158, 255, 0.35);
+    animation: subPlayBtnLoading 0.9s ease-in-out infinite;
+}
+
 .subtitle-list-scroll {
-    max-height: 380px;
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
     padding-right: 4px;
     overscroll-behavior: contain;
+}
+
+.subtitle-pager {
+    display: grid;
+    grid-template-columns: minmax(76px, auto) minmax(120px, 1fr) minmax(76px, auto);
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.subtitle-pager button {
+    padding: 3px 10px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.subtitle-pager button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.subtitle-page-info {
+    color: var(--muted-color);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    min-width: 0;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .subtitle-virtual-spacer {
@@ -3407,10 +3498,9 @@ pre {
 }
 
 .subtitle-list-item {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    grid-template-rows: auto auto;
-    gap: 2px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
     padding: 8px 10px;
     margin-bottom: 4px;
     border-radius: var(--radius-sm);
@@ -3431,6 +3521,11 @@ pre {
     border-color: var(--accent-color);
 }
 
+.subtitle-list-item.selected {
+    border-color: rgba(79, 158, 255, 0.85);
+    box-shadow: inset 0 0 0 1px rgba(79, 158, 255, 0.35);
+}
+
 .subtitle-list-item.playing {
     background: rgba(79, 200, 100, 0.15);
     border-color: rgba(79, 200, 100, 0.5);
@@ -3441,10 +3536,8 @@ pre {
 }
 
 .subtitle-list-item .sub-play-btn {
-    grid-column: 1;
-    grid-row: 1;
     flex-shrink: 0;
-    padding: 1px 5px;
+    padding: 1px 8px;
     font-size: 11px;
     line-height: 1.4;
     background: rgba(79, 200, 100, 0.25);
@@ -3453,8 +3546,6 @@ pre {
     color: var(--fg-color);
     cursor: pointer;
     transition: background 150ms ease;
-    justify-self: start;
-    align-self: center;
 }
 
 .subtitle-list-item .sub-play-btn:hover {
@@ -3484,8 +3575,6 @@ pre {
 }
 
 .subtitle-list-item .sub-time {
-    grid-column: 2;
-    grid-row: 1;
     font-family: monospace;
     font-size: 11px;
     color: var(--muted-color);
@@ -3494,6 +3583,9 @@ pre {
     align-items: center;
     gap: 2px;
     min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    white-space: nowrap;
 }
 
 .subtitle-list-item .sub-time-value {
@@ -3517,8 +3609,6 @@ pre {
 }
 
 .subtitle-list-item .sub-text {
-    grid-column: 1 / -1;
-    grid-row: 2;
     font-size: 13px;
     line-height: 1.5;
     word-break: break-word;
@@ -3526,13 +3616,11 @@ pre {
 }
 
 .subtitle-list-item .sub-actions {
-    grid-column: 3;
-    grid-row: 1;
     display: flex;
     align-items: center;
     gap: 4px;
-    justify-self: end;
-    align-self: start;
+    flex: 0 0 auto;
+    margin-left: auto;
 }
 
 .subtitle-list-item .sub-add-btn {
@@ -3550,6 +3638,7 @@ pre {
 
 .subtitle-list-item .sub-add-btn:hover {
     background: var(--accent-color);
+    color: var(--accent-text-color);
 }
 
 /* 字幕编辑按钮 */
@@ -3635,8 +3724,6 @@ pre {
 }
 
 .subtitle-list-item .sub-text-edit {
-    grid-column: 1 / -1;
-    grid-row: 2;
     min-width: 0;
 }
 .subtitle-list-item .sub-textarea {
@@ -3661,20 +3748,19 @@ pre {
 
 /* 移动端：字幕编辑时紧凑布局 */
 @media (max-width: 480px) {
-    .subtitle-list-item {
-        grid-template-columns: auto 1fr;
+    .subtitle-toolbar {
+        align-items: flex-start;
+        gap: 4px;
+    }
+    .subtitle-toolbar-hint {
+        flex-basis: 100%;
     }
     .subtitle-list-item .sub-actions {
-        grid-column: 2;
-        grid-row: 2;
-        justify-self: start;
-        align-self: start;
         gap: 3px;
+        margin-left: 0;
     }
-    .subtitle-list-item .sub-text,
-    .subtitle-list-item .sub-text-edit {
-        grid-column: 1 / -1;
-        grid-row: 3;
+    .subtitle-list-item .sub-time {
+        flex: 1 1 calc(100% - 34px);
     }
     .subtitle-list-item .sub-time-input {
         width: 6em;
@@ -3683,6 +3769,7 @@ pre {
     .subtitle-list-item .sub-save-btn,
     .subtitle-list-item .sub-cancel-btn,
     .subtitle-list-item .sub-del-btn,
+    .subtitle-list-item .sub-play-btn,
     .subtitle-list-item .sub-edit-btn,
     .subtitle-list-item .sub-add-btn {
         padding: 1px 4px;
@@ -3693,7 +3780,19 @@ pre {
         font-size: 12px;
     }
     .subtitle-list-scroll {
-        max-height: 260px;
+        max-height: none;
+    }
+    .subtitle-pager {
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+    }
+    .subtitle-page-info {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        white-space: normal;
+    }
+    .subtitle-pager button {
+        width: 100%;
     }
 }
 
@@ -3752,7 +3851,7 @@ pre {
 
 .source-mode-option input:checked+.mode-label {
     background: var(--accent-color);
-    color: #fff;
+    color: var(--accent-text-color);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
@@ -3762,7 +3861,7 @@ pre {
 }
 
 .source-mode-option input:checked+.mode-label:hover {
-    color: #fff;
+    color: var(--accent-text-color);
 }
 
 /* ------------------ Slice Config Checkboxes ------------------ */
@@ -4881,7 +4980,7 @@ pre {
 }
 
 .tl-btn.active {
-    color: #fff;
+    color: var(--accent-text-color);
     background: var(--accent-color);
     border-color: var(--accent-color);
 }
@@ -4892,17 +4991,41 @@ pre {
     pointer-events: none;
 }
 
-/* 播放时间显示 — 不允许省略 */
+/* 播放时间显示：允许在窄屏内收缩，避免撑出控制栏 */
 .tl-bar-left .time-text {
     font-size: 11px;
     font-weight: 600;
     color: rgba(255, 255, 255, 0.65);
     font-family: monospace;
     white-space: nowrap;
-    flex-shrink: 0;
-    max-width: none !important;
-    overflow: visible;
-    text-overflow: clip;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: min(44vw, 220px) !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@media (max-width: 520px) {
+    #videoControlsContainer .timeline-container-title {
+        flex-wrap: wrap;
+    }
+
+    #videoControlsContainer .tl-bar-left {
+        flex: 1 1 100%;
+        min-width: 0;
+        flex-wrap: wrap;
+    }
+
+    #videoControlsContainer .tl-bar-left .time-text {
+        flex: 1 0 100%;
+        order: -1;
+        max-width: 100% !important;
+        width: 100%;
+        overflow: hidden;
+        text-overflow: clip;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
 }
 
 /* ---- 裁切标记按钮（工具栏内） ---- */
@@ -4997,7 +5120,7 @@ pre {
 
 .tl-dropdown-item.active {
     background: var(--accent-color);
-    color: #fff;
+    color: var(--accent-text-color);
 }
 
 .tl-dropdown-item:disabled {

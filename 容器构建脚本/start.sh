@@ -57,6 +57,15 @@ for file in /opt/webclip/templates/*; do
     fi
 done
 
+# 语音识别安装
+for file in /opt/opencc/*; do
+    filename=$(basename "$file")
+    target="/rec/语音识别/$filename"
+    if [ -f "$file" ] && [ ! -f "$target" ]; then
+        cp "$file" "$target"
+    fi
+done
+
 # biliup安装
 if [ ! -f /rec/biliup/biliup ]; then
     cp /root/biliup/biliup /rec/biliup/biliup
@@ -314,6 +323,20 @@ fi
 EOF
 chmod +x "$WEBCLIP_SCHEDULER_SCRIPT"
 "$WEBCLIP_SCHEDULER_SCRIPT" &
+
+# 创建语音识别服务的定时任务
+OPENCC_SCHEDULER_SCRIPT="/usr/local/bin/语音识别启动脚本.sh"
+cat << 'EOF' > "$OPENCC_SCHEDULER_SCRIPT"
+#!/bin/bash
+CONFIG_FILE="/rec/config.conf"
+source "$CONFIG_FILE"
+if [[ "$ENABLE_OPENCC" = "true" ]] && [[ -f "/rec/opencc/app.py" ]]; then
+  echo "启动语音识别服务..."
+  python3 /rec/opencc/app.py > /dev/null 2>&1 &
+fi
+EOF
+chmod +x "$OPENCC_SCHEDULER_SCRIPT"
+"$OPENCC_SCHEDULER_SCRIPT" &
 
 # 输出账户信息
 echo "------------------------------------"
