@@ -13,6 +13,7 @@ mkdir -p /rec/apps
 mkdir -p /rec/在线切片
 mkdir -p /rec/在线切片/static
 mkdir -p /rec/在线切片/templates
+mkdir -p /rec/语音识别
 
 # ================= 新增：Token 提取与持久化逻辑 =================
 TOKEN_FILE="/app/.github_token"
