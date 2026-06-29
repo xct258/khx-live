@@ -993,6 +993,36 @@ class CancelMergeRequest(BaseModel):
 class DeleteOutputRequest(BaseModel):
     file: str
 
+
+def _resolve_merge_source_path(video_name: str, source_mode: str) -> tuple[str, Path]:
+    target_name = str(video_name or "")
+    if target_name and not target_name.startswith("括弧笑bilibili"):
+        if target_name.startswith("压制版") or target_name.startswith("原版"):
+            target_name = "括弧笑bilibili/" + target_name
+        else:
+            target_name = "括弧笑bilibili/压制版/" + target_name
+
+    p = Path(target_name)
+    if p.name.startswith(PREVIEW_PREFIX):
+        bare_name = p.name[len(PREVIEW_PREFIX):]
+        parts = list(p.parts)
+
+        if source_mode == "encode":
+            target_name = str(Path(*parts).parent / (ENCODE_PREFIX + bare_name)).replace("\\", "/")
+        elif source_mode == "original":
+            if parts and len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
+                parts[1] = "原文件"
+            else:
+                raise HTTPException(400, f"无法识别压制版目录结构: {video_name}")
+            target_name = str(Path(*parts).parent / bare_name).replace("\\", "/")
+        else:
+            raise HTTPException(400, f"unsupported source_mode: {source_mode}")
+
+    src = sanitize_name(target_name)
+    if not src.exists():
+        raise FileNotFoundError(f"找不到源文件 (模式: {source_mode}): {target_name}")
+    return target_name, src
+
 class SubtitleEditItem(BaseModel):
     index: int = Field(ge=0)
     start: float = Field(ge=0)
@@ -1213,7 +1243,8 @@ SUBTITLE_PARSE_TIMESTAMP_RE = re.compile(
 
 
 def _parse_timestamp_to_seconds(h: str, m: str, s: str, ms: str) -> float:
-    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms.rjust(3, '0')) / 1000.0
+    frac = int(ms) / (10 ** len(ms)) if ms else 0
+    return int(h) * 3600 + int(m) * 60 + int(s) + frac
 
 
 def _parse_srt(content: str) -> list[dict]:
@@ -1230,7 +1261,7 @@ def _parse_srt(content: str) -> list[dict]:
             text = content[text_start:next_match_start].strip()
         text = "\n".join(line.strip() for line in text.split("\n") if line.strip())
         if text:
-            subtitles.append({"start": round(start, 3), "end": round(end, 3), "text": text})
+            subtitles.append({"start": round(start, 2), "end": round(end, 2), "text": text})
     return subtitles
 
 
@@ -1247,7 +1278,7 @@ def _parse_txt_timestamps(content: str) -> list[dict]:
             text = content[text_start:line_end].strip()
         text = text.lstrip("]").strip()
         if text:
-            subtitles.append({"start": round(start, 3), "end": round(end, 3), "text": text})
+            subtitles.append({"start": round(start, 2), "end": round(end, 2), "text": text})
     return subtitles
 
 
@@ -1303,11 +1334,11 @@ def _seconds_to_srt_ts(sec: float) -> str:
     h = int(sec // 3600)
     m = int((sec % 3600) // 60)
     s = int(sec % 60)
-    ms = int(round((sec - int(sec)) * 1000))
-    if ms >= 1000:
+    cs = int(round((sec - int(sec)) * 100))
+    if cs >= 100:
         s += 1
-        ms = 0
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+        cs = 0
+    return f"{h:02d}:{m:02d}:{s:02d},{cs:02d}"
 
 
 def _subtitles_to_srt(subtitles: list[dict]) -> str:
@@ -1360,8 +1391,22 @@ def _format_change_comments(username: str, edits: list, original_subs: list[dict
             deleted_text = orig.get("text", e.text)
             lines.append(f"  ✕ #{e.index}: 删除 \"{deleted_text}\"")
         else:
-            lines.append(f"  #{e.index}: {_seconds_to_srt_ts(e.start)} → {_seconds_to_srt_ts(e.end)} - {e.text}")
+            orig = (original_subs[e.index] if original_subs and e.index < len(original_subs) else {})
+            if "start" in orig and "end" in orig:
+                old_range = f"{_seconds_to_srt_ts(orig['start'])} → {_seconds_to_srt_ts(orig['end'])}"
+                new_range = f"{_seconds_to_srt_ts(e.start)} → {_seconds_to_srt_ts(e.end)}"
+                lines.append(f"  #{e.index}: {old_range} => {new_range} - {e.text}")
+            else:
+                lines.append(f"  #{e.index}: {_seconds_to_srt_ts(e.start)} → {_seconds_to_srt_ts(e.end)} - {e.text}")
     return "\n".join(lines) + "\n"
+
+
+def _backup_subtitle_file(path: Path) -> Path:
+    backup_path = path.with_name(f"{path.stem}_原始备份{path.suffix}")
+    if backup_path.exists():
+        return backup_path
+    shutil.copy2(path, backup_path)
+    return backup_path
 
 
 @app.post("/api/subtitle/{name:path}")
@@ -1401,13 +1446,19 @@ async def save_subtitle(name: str, req: SubtitleEditRequest):
             current_subs.pop(edit.index)
         else:
             current_subs[edit.index] = {
-                "start": round(edit.start, 3),
-                "end": round(edit.end, 3),
+                "start": round(edit.start, 2),
+                "end": round(edit.end, 2),
                 "text": edit.text.strip(),
             }
 
     # Build change record comment block (用原始数据记录删除内容)
     change_header = _format_change_comments(req.username, req.edits, original_subs)
+
+    for ext, ext_path_str in subtitle_files.items():
+        try:
+            _backup_subtitle_file(Path(ext_path_str))
+        except Exception as e:
+            raise HTTPException(500, f"备份 {ext} 字幕文件失败: {e}")
 
     # 同时更新所有存在的字幕文件（srt/txt 等）
     first_sub_path = None
@@ -1646,10 +1697,13 @@ async def stream_audio(name: str, request: Request):
 
 
 @app.get("/api/preview_clip")
-async def preview_clip(name: str, start: float, end: float):
+async def preview_clip(name: str, start: float, end: float, source_mode: str = "encode"):
     """预览单个片段：用与切片完全一致的 ffmpeg 参数生成临时文件。
     预览即切片本身，保证帧数 100% 一致。"""
-    path = sanitize_name(name)
+    try:
+        target_name, path = _resolve_merge_source_path(name, source_mode)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Video not found")
 
@@ -1661,7 +1715,7 @@ async def preview_clip(name: str, start: float, end: float):
     total_frames = end_frame - start_frame + 1
     total_duration = total_frames / fps
 
-    cache_key = f"{name}|{start:.6f}|{end:.6f}"
+    cache_key = f"{source_mode}|{target_name}|{start:.6f}|{end:.6f}"
     cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]
     preview_path = TMP_OUTPUT_DIR / f"preview_{cache_hash}.mp4"
 
@@ -1669,7 +1723,7 @@ async def preview_clip(name: str, start: float, end: float):
         cmd = ["ffmpeg", "-y",
                "-ss", f"{float(start):.6f}",
                "-i", str(path),
-               "-frames:v", str(total_frames - 1),
+               "-frames:v", str(total_frames),
                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                "-pix_fmt", "yuv420p",
                "-c:a", "aac", "-b:a", "192k",
@@ -1683,10 +1737,6 @@ async def preview_clip(name: str, start: float, end: float):
 
     return FileResponse(preview_path, media_type="video/mp4",
                         headers={"Cache-Control": "public, max-age=600"})
-
-
-
-
 
 def _ffprobe_first_frame_pts(path: Path) -> float:
     """获取首帧的 PTS（秒），用于计算帧号偏移"""
@@ -2450,44 +2500,7 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             if _merge_cancel_event.is_set():
                 raise MergeCancelled("用户取消合并")
             
-            # ----------------- 源文件版本替换逻辑（新版目录结构） -----------------
-            target_name = vid.name
-            # 如果前端传来的路径没带“括弧笑bilibili/压制版”，补上它以便后续替换逻辑生效
-            if target_name and not target_name.startswith("括弧笑bilibili"):
-                if target_name.startswith("压制版") or target_name.startswith("原版"):
-                    target_name = "括弧笑bilibili/" + target_name
-                else:
-                    target_name = "括弧笑bilibili/压制版/" + target_name
-            
-            p = Path(target_name)
-
-            if p.name.startswith(PREVIEW_PREFIX):
-
-                bare_name = p.name[len(PREVIEW_PREFIX):]  # 去掉“预览版-”
-                parts = list(p.parts)  # ['括弧笑bilibili','压制版','2026','02','22','预览版-1.mp4']
-
-                if source_mode == "encode":
-                    # 压制版目录保持不变，只替换文件名前缀
-                    new_filename = ENCODE_PREFIX + bare_name
-                    new_path = Path(*parts).parent / new_filename
-
-                elif source_mode == "original":
-                    # 目录结构: 括弧笑bilibili/压制版/... -> 括弧笑bilibili/原版/...
-                    if parts and len(parts) >= 2 and parts[0] == "括弧笑bilibili" and parts[1] == "压制版":
-                        parts[1] = "原文件"
-                    else:
-                        raise HTTPException(400, f"无法识别压制版目录结构: {vid.name}")
-
-                    new_filename = bare_name  # 原版没有前缀
-                    new_path = Path(*parts).parent / new_filename
-
-                else:
-                    raise HTTPException(400, f"unsupported source_mode: {source_mode}")
-
-                target_name = str(new_path).replace("\\", "/")
-            src = sanitize_name(target_name)
-            if not src.exists():
-                raise FileNotFoundError(f"找不到源文件 (模式: {source_mode}): {target_name}")
+            target_name, src = _resolve_merge_source_path(vid.name, source_mode)
             src_fps = _get_video_fps_cached(src)
 
             # ---------- 单条 ffmpeg 命令：视频+音频一次切片（消除 SoX/mux 的对不齐风险） ----------

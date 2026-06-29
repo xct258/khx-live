@@ -418,14 +418,23 @@ else
         if [[ "$ENABLE_ASR_SUBMIT" == "true" && "${#audio_files[@]}" -gt 0 ]]; then
           ASR_SERVER="${ASR_SERVER:-192.168.50.5}"
           ASR_PORT="${ASR_PORT:-8286}"
-          log info "提交 ${#audio_files[@]} 个音频文件到语音识别后端 ${ASR_SERVER}:${ASR_PORT}"
+          # 路径类型默认为 windows，可选值: windows / linux
+          ASR_PATH_TYPE="${ASR_PATH_TYPE:-windows}" 
+          log info "提交 ${#audio_files[@]} 个音频文件到语音识别后端 ${ASR_SERVER}:${ASR_PORT} (类型: ${ASR_PATH_TYPE})"
           for audio_file in "${audio_files[@]}"; do
             log info "提交语音识别任务: $audio_file"
-            remote_path=$(echo "$audio_file" | sed \
-              -e 's|/|\\|g' \
-              -e "s|^\\\\rec\\\\videos|$ASR_REMOTE_PATH|" \
-              -e 's|\\|\\\\|g')
-            log info "远程路径: $remote_path"
+            # 根据系统类型处理路径
+            if [[ "$ASR_PATH_TYPE" == "linux" ]]; then
+              # Linux 路径处理：直接使用原始路径
+              remote_path="$audio_file"
+            else
+              # Windows 路径处理：将正斜杠转为反斜杠，替换前缀，并对反斜杠进行转义以符合 JSON 规范
+              remote_path=$(echo "$audio_file" | sed \
+                -e 's|/|\\|g' \
+                -e "s|^\\\\rec\\\\videos|$ASR_REMOTE_PATH|" \
+                -e 's|\\|\\\\|g')
+            fi
+            log info "后端接收路径: $remote_path"
             response=$(curl -s --connect-timeout 5 --max-time 5 -X POST "http://${ASR_SERVER}:${ASR_PORT}/submit_task" \
               -H "Content-Type: application/json" \
               -d "{\"audio_path\": \"$remote_path\", \"device\": \"auto\"}")

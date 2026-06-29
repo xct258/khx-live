@@ -45,6 +45,7 @@ apt install -y \
     python3 \
     python3-pip
 
+# opencc,torch,faster_whisper为语音识别相关依赖
 pip install \
     numpy \
     matplotlib \
@@ -54,6 +55,9 @@ pip install \
     jinja2 \
     pydantic \
     python-multipart \
+    opencc \
+    torch \
+    faster_whisper \
     --break-system-packages
 
 # 安装intel核显驱动
@@ -92,7 +96,7 @@ chmod +x /root/BililiveRecorder/BililiveRecorder.Cli
 
 # 下载容器所需脚本
 # 创建相关目录
-mkdir -p /opt/bililive/config /opt/bililive/scripts /opt/bililive/biliup /opt/webclip /opt/webclip/static /opt/webclip/templates
+mkdir -p /opt/bililive/config /opt/bililive/scripts /opt/bililive/biliup /opt/webclip /opt/webclip/static /opt/webclip/templates /opt/opencc
 # 下载视频处理相关脚本
 wget -O /opt/bililive/config/config.conf https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/config.conf
 wget -O /opt/bililive/scripts/录播上传备份脚本.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/录播上传备份脚本.sh
@@ -113,6 +117,10 @@ wget -O /opt/webclip/static/favicon.ico https://raw.githubusercontent.com/xct258
 wget -O /opt/webclip/static/script.js https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/script.js
 wget -O /opt/webclip/static/style.css https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/style.css
 wget -O /opt/webclip/templates/index.html https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/templates/index.html
+
+wget -O /opt/opencc/index.html https://raw.githubusercontent.com/xct258/khx-live/main/语音识别/index.html
+wget -O /opt/opencc/app.py https://raw.githubusercontent.com/xct258/khx-live/main/语音识别/app.py
+
 chmod +x /opt/bililive/scripts/*.sh
 chmod +x /opt/bililive/biliup/*.sh
 

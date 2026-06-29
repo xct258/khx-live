@@ -355,7 +355,7 @@
                                     <button id="backwardBtn" class="icon-btn" title="后退5秒" disabled>后退</button>
                                     <button id="playPauseBtn" class="icon-btn" title="播放/暂停" disabled>播放</button>
                                     <button id="forwardBtn" class="icon-btn" title="前进5秒" disabled>前进</button>
-                                    <span id="timeDisplay" class="time-text">00:00:00 / 00:00:00</span>
+                                    <span id="timeDisplay" class="time-text">00:00:00,00 / 00:00:00,00</span>
                                 </div>
 
                                 <!-- 右侧：倍速 + 选择视频（已集成） -->
@@ -404,11 +404,25 @@
 
             <!-- 字幕切片面板 -->
             <div class="panel" id="subtitleSlicePanel" style="display:none;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
                     <h3 class="panel-title">字幕切片</h3>
+                </div>
+                <div id="subtitleToolbar" class="subtitle-toolbar" aria-label="字幕工具栏">
+                    <span id="subtitleToolbarHint" class="subtitle-toolbar-hint">请选择字幕</span>
+                    <button id="subtitleToolbarPlayBtn" type="button" disabled>播放</button>
+                    <button id="subtitleToolbarEditBtn" type="button" disabled>编辑</button>
+                    <button id="subtitleToolbarAddBtn" type="button" disabled>添加片段</button>
+                    <button id="subtitleToolbarSaveBtn" type="button" disabled>保存</button>
+                    <button id="subtitleToolbarCancelBtn" type="button" disabled>取消</button>
+                    <button id="subtitleToolbarDeleteBtn" type="button" disabled>删除</button>
                 </div>
                 <div id="subtitleListContainer" class="subtitle-list-scroll">
                     <div style="text-align:center; padding:20px; color:var(--muted-color);">暂无字幕数据</div>
+                </div>
+                <div id="subtitlePager" class="subtitle-pager" style="display:none;">
+                    <button id="subtitlePrevPageBtn" type="button">上一页</button>
+                    <span id="subtitlePageInfo" class="subtitle-page-info">第 1 / 1 页</span>
+                    <button id="subtitleNextPageBtn" type="button">下一页</button>
                 </div>
             </div>
 
