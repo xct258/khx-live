@@ -5,7 +5,7 @@ REPO="xct258/Documentation"
 BRANCH="main"
 SYNC_SCRIPT="/rec/脚本/更新录播姬配置文件.py"
 RECORDER_CMD="/root/BililiveRecorder/BililiveRecorder.Cli run --bind http://*:2356 --http-basic-user ${Bililive_USER} --http-basic-pass ${Bililive_PASS} /rec/录播姬"
-TOKEN_FILE="/root/.github_token"
+TOKEN_FILE="/app/.github_token"
 
 # 引入日志函数库
 export LOG_BASE_DIR="/rec/logs"
