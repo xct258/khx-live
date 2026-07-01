@@ -15,25 +15,115 @@ mkdir -p /rec/在线切片/static
 mkdir -p /rec/在线切片/templates
 mkdir -p /rec/语音识别
 
-# ================= 新增：Token 提取与持久化逻辑 =================
 TOKEN_FILE="/app/.github_token"
-
 # 1. 如果环境变量传入了 Token，优先使用并持久化保存到文件
 if [ -n "$XCT258_GITHUB_TOKEN" ]; then
   echo "$XCT258_GITHUB_TOKEN" > "$TOKEN_FILE"
   chmod 600 "$TOKEN_FILE" # 设置权限，保护私密信息
 fi
-
 # 2. 统一读取 Token（用于赋值给后续操作，即使容器重启未传环境变量也能读到）
 CURRENT_GITHUB_TOKEN=""
 if [ -f "$TOKEN_FILE" ]; then
   CURRENT_GITHUB_TOKEN=$(cat "$TOKEN_FILE")
 fi
-# ==============================================================
 
 # 配置文件单独处理
 if [ ! -f /rec/config.conf ]; then
     cp /opt/bililive/config/config.conf /rec/config.conf
+fi
+
+STATUS_FILE="/app/.status"
+touch "$STATUS_FILE"
+
+# =====================================================================
+# 1. 语音识别依赖安装
+# =====================================================================
+if [[ "$ENABLE_OPENCC" = "true" ]]; then
+    # 检查状态文件中是否包含 SPEECH_INSTALLED 标记
+    if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
+        echo "========================================="
+        echo "检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
+        echo "========================================="
+        
+        pip install \
+            opencc \
+            torch \
+            faster_whisper \
+            --break-system-packages
+
+        # 判断上一步 pip 是否成功
+        if [ $? -eq 0 ]; then
+            CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+            # 将运行时间写入状态文件
+            echo "SPEECH_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
+            echo "【成功】语音识别依赖安装完毕！"
+        else
+            echo "【错误】语音识别依赖安装失败，不写入状态。"
+            exit 1
+        fi
+    else
+        echo "【跳过】语音识别依赖已于历史记录中安装，无需重复检测。"
+    fi
+fi
+
+# =====================================================================
+# 2. 在线切片依赖安装
+# =====================================================================
+if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
+    # 检查状态文件中是否包含 WEBCLIP_INSTALLED 标记
+    if ! grep -q "WEBCLIP_INSTALLED" "$STATUS_FILE"; then
+        echo "========================================="
+        echo "检测到开启在线切片，正在安装 Web 依赖..."
+        echo "========================================="
+        
+        pip install \
+            fastapi \
+            uvicorn[standard] \
+            jinja2 \
+            pydantic \
+            python-multipart \
+            --break-system-packages
+
+        # 判断上一步 pip 是否成功
+        if [ $? -eq 0 ]; then
+            CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+            # 将运行时间追加到同一个状态文件
+            echo "WEBCLIP_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
+            echo "【成功】在线切片依赖安装完毕！"
+        else
+            echo "【错误】在线切片依赖安装失败，不写入状态。"
+            exit 1
+        fi
+    else
+        echo "【跳过】在线切片依赖已于历史记录中安装，无需重复检测。"
+    fi
+fi
+
+# intel核显驱动安装
+if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
+  if ! grep -q "INTEL_GPU_INSTALLED" "$STATUS_FILE"; then
+    echo "========================================="
+    echo "检测到开启 Intel 核显加速，正在安装驱动..."
+    echo "========================================="
+    
+    apt update
+    apt install -y gpg wget
+    wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
+    echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
+    apt update
+    apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
+
+    if [ $? -eq 0 ]; then
+      CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+      echo "INTEL_GPU_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
+      echo "【成功】Intel 核显驱动安装完毕！"
+    else
+      echo "【错误】Intel 核显驱动安装失败，不写入状态。"
+      exit 1
+    fi
+  else
+    echo "【跳过】Intel 核显驱动已于历史记录中安装，无需重复检测。"
+  fi
 fi
 
 # 在线切片安装
@@ -265,45 +355,80 @@ cat << 'EOF' > "$SCHEDULER_SCRIPT"
 #!/bin/bash
 
 CONFIG_FILE="/rec/config.conf"
-DEFAULT_SLEEP_TIME="02:00"
+DEFAULT_SLEEP_TIME="300"  # 每五分钟检查一次状态
+LOG_FILE="/rec/备份脚本执行日志.log"
+
+# 引入日志函数库
+export LOG_BASE_DIR="/rec/logs"
+export LOG_MAX_FILES=100
+source "/rec/脚本/log.sh"
+
+# 用于记录上一次检查时的整体状态（0: 均静止, 1: 有目录在录制）
+LAST_STATUS=0 
+
+log info "目录监控脚本已启动..."
 
 while true; do
-  # 读取配置文件
+  # 1. 读取配置文件
   if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
   else
-    echo "配置文件不存在，使用默认设置" >> /rec/备份脚本执行日志.log 2>&1
+    log warn "配置文件不存在，使用默认设置"
     ENABLE_UPLOAD_SCRIPT=false
-    SCHEDULE_SLEEP_TIME="$DEFAULT_SLEEP_TIME"
   fi
 
-  # 如果未启用，则跳过执行
+  # 如果未启用，则跳过后续检查
   if [[ "$ENABLE_UPLOAD_SCRIPT" != "true" ]]; then
-    echo "$(date)" > /rec/备份脚本执行日志.log 2>&1
-    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
-    echo "已禁用上传脚本执行，跳过本次任务。" >> /rec/备份脚本执行日志.log 2>&1
-    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
-    echo "$(date)" >> /rec/备份脚本执行日志.log 2>&1
-  else
-    echo "$(date)" > /rec/备份脚本执行日志.log 2>&1
-    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
-    /rec/脚本/录播上传备份脚本.sh >> /rec/备份脚本执行日志.log 2>&1
-    echo "----------------------------" >> /rec/备份脚本执行日志.log 2>&1
-    echo "$(date)" >> /rec/备份脚本执行日志.log 2>&1
+    log info "配置文件中未启用上传备份脚本，跳过检查。"
+    sleep "$DEFAULT_SLEEP_TIME"
+    continue
   fi
 
-  # 计算下次执行时间
-  current_date=$(date +%Y-%m-%d)
-  now_ts=$(date +%s)
-  target_time="${current_date} ${SCHEDULE_SLEEP_TIME:-$DEFAULT_SLEEP_TIME}"
-  time_difference=$(( $(date -d "$target_time" +%s) - $now_ts ))
-  # 当 time_difference 为 0 或负值时，表示已经到达或错过预定执行时间，需要设为次日同一时间
-  if [[ $time_difference -le 0 ]]; then
-    time_difference=$(( time_difference + 86400 ))  # 加一天
+  # 2. 遍历所有配置的源文件夹，检查写入状态
+  ANY_RECORDING=false # 局部变量：标记本次循环中是否有任意一个目录在录制
+  SAVED_RECENT_FILES="" # 新增：用于记录究竟是哪些文件在写入
+  for folder in "${source_folders[@]}"; do
+    # 如果文件夹不存在，跳过检查并在日志中警告
+    if [[ ! -d "$folder" ]]; then
+      log warn "监控目录 $folder 不存在，跳过该目录检查。"
+      continue
+    fi
+
+    # 核心逻辑：使用 find 检查该目录下 20 分钟内是否有文件被修改/写入
+    RECENT_FILES=$(find "$folder" -type f -mmin -20 2>/dev/null)
+    
+    if [[ -n "$RECENT_FILES" ]]; then
+      ANY_RECORDING=true
+      SAVED_RECENT_FILES="${SAVED_RECENT_FILES}${RECENT_FILES}"$'\n'
+    fi
+  done
+
+  # 3. 状态机逻辑判断
+  if [[ "$ANY_RECORDING" = true ]]; then
+    # 情况 A：至少有一个目录正在写入
+    if [[ $LAST_STATUS -eq 0 ]]; then
+      log info "检测到写入，重置状态..."
+      echo "$SAVED_RECENT_FILES" | sed '/^\s*$/d' | while read -r file; do
+        log info "触发写入的文件: $file"
+      done
+    fi
+    LAST_STATUS=1 # 标记整体为录制中状态
+  else
+    # 情况 B：所有目录在过去 20 分钟内都没有任何文件写入
+    if [[ $LAST_STATUS -eq 1 ]]; then
+      # 关键节点：所有录制都结束，且距离最后一次写入已满 20 分钟
+      log info "所有设置目录停止写入已满 20 分钟，判断录制全部结束，开始执行备份..."
+      # 执行核心备份脚本
+      /rec/脚本/录播上传备份脚本.sh >> "$LOG_FILE" 2>&1
+      log info "备份脚本执行完毕。"
+      
+      LAST_STATUS=0 # 重置状态，等待下一次录制
+    else
+      # 持续静止状态（没有录制，或者早就录完上传过了），不做任何操作
+      :
+    fi
   fi
-  wake_time=$(date -d "@$(( $now_ts + $time_difference ))" '+%Y-%m-%d %H:%M:%S')
-  echo "睡眠 $time_difference 秒，预计下次执行时间 $wake_time" >> /rec/备份脚本执行日志.log 2>&1
-  sleep $time_difference
+  sleep "$DEFAULT_SLEEP_TIME"
 done
 EOF
 
