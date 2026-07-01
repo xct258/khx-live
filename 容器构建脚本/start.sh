@@ -34,70 +34,7 @@ fi
 
 STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
-
-# =====================================================================
-# 1. 语音识别依赖安装
-# =====================================================================
-if [[ "$ENABLE_OPENCC" = "true" ]]; then
-    # 检查状态文件中是否包含 SPEECH_INSTALLED 标记
-    if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
-        echo "========================================="
-        echo "检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
-        echo "========================================="
-        
-        pip install \
-            opencc \
-            torch \
-            faster_whisper \
-            --break-system-packages
-
-        # 判断上一步 pip 是否成功
-        if [ $? -eq 0 ]; then
-            CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
-            # 将运行时间写入状态文件
-            echo "SPEECH_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
-            echo "【成功】语音识别依赖安装完毕！"
-        else
-            echo "【错误】语音识别依赖安装失败，不写入状态。"
-            exit 1
-        fi
-    else
-        echo "【跳过】语音识别依赖已于历史记录中安装，无需重复检测。"
-    fi
-fi
-
-# =====================================================================
-# 2. 在线切片依赖安装
-# =====================================================================
-if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
-    # 检查状态文件中是否包含 WEBCLIP_INSTALLED 标记
-    if ! grep -q "WEBCLIP_INSTALLED" "$STATUS_FILE"; then
-        echo "========================================="
-        echo "检测到开启在线切片，正在安装 Web 依赖..."
-        echo "========================================="
-        
-        pip install \
-            fastapi \
-            uvicorn[standard] \
-            jinja2 \
-            pydantic \
-            python-multipart \
-            --break-system-packages
-
-        # 判断上一步 pip 是否成功
-        if [ $? -eq 0 ]; then
-            CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
-            # 将运行时间追加到同一个状态文件
-            echo "WEBCLIP_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
-            echo "【成功】在线切片依赖安装完毕！"
-        else
-            echo "【错误】在线切片依赖安装失败，不写入状态。"
-            exit 1
-        fi
-    else
-        echo "【跳过】在线切片依赖已于历史记录中安装，无需重复检测。"
-    fi
-fi
+source /rec/config.conf
 
 # intel核显驱动安装
 if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
@@ -445,11 +382,42 @@ WEBCLIP_SCHEDULER_SCRIPT="/usr/local/bin/在线切片启动脚本.sh"
 cat << 'EOF' > "$WEBCLIP_SCHEDULER_SCRIPT"
 #!/bin/bash
 CONFIG_FILE="/rec/config.conf"
-source "$CONFIG_FILE"
-if [[ "$ENABLE_WEBCLIP" = "true" ]] && [[ -f "/rec/在线切片/app.py" ]]; then
-  echo "启动在线切片服务..."
-  port="${WEBCLIP_PORT:-8186}"
-  uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
+STATUS_FILE="/app/.status"
+touch "$STATUS_FILE"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
+
+if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
+    # 检查是否已安装过
+    if ! grep -q "WEBCLIP_INSTALLED" "$STATUS_FILE"; then
+        echo "========================================="
+        echo "【子脚本】检测到开启在线切片，正在安装 Web 依赖..."
+        echo "========================================="
+        pip install \
+            fastapi \
+            uvicorn[standard] \
+            jinja2 \
+            pydantic \
+            python-multipart \
+            --break-system-packages
+
+        if [ $? -eq 0 ]; then
+            echo "WEBCLIP_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
+            echo "【成功】在线切片依赖安装完毕！"
+        else
+            echo "【错误】在线切片依赖安装失败！"
+            exit 1
+        fi
+    fi
+
+    # 启动服务
+    if [[ -f "/rec/在线切片/app.py" ]]; then
+        echo "启动在线切片服务..."
+        port="${WEBCLIP_PORT:-8186}"
+        uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
+    fi
 fi
 EOF
 chmod +x "$WEBCLIP_SCHEDULER_SCRIPT"
@@ -460,10 +428,39 @@ OPENCC_SCHEDULER_SCRIPT="/usr/local/bin/语音识别启动脚本.sh"
 cat << 'EOF' > "$OPENCC_SCHEDULER_SCRIPT"
 #!/bin/bash
 CONFIG_FILE="/rec/config.conf"
-source "$CONFIG_FILE"
-if [[ "$ENABLE_OPENCC" = "true" ]] && [[ -f "/rec/语音识别/app.py" ]]; then
-  echo "启动语音识别服务..."
-  python3 /rec/语音识别/app.py > /dev/null 2>&1 &
+STATUS_FILE="/app/.status"
+touch "$STATUS_FILE"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
+
+if [[ "$ENABLE_OPENCC" = "true" ]]; then
+    # 检查是否已安装过
+    if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
+        echo "========================================="
+        echo "【子脚本】检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
+        echo "========================================="
+        pip install \
+            opencc \
+            torch \
+            faster_whisper \
+            --break-system-packages
+
+        if [ $? -eq 0 ]; then
+            echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
+            echo "【成功】语音识别依赖安装完毕！"
+        else
+            echo "【错误】语音识别依赖安装失败！"
+            exit 1
+        fi
+    fi
+
+    # 启动服务
+    if [[ -f "/rec/语音识别/app.py" ]]; then
+        echo "启动语音识别服务..."
+        python3 /rec/语音识别/app.py > /dev/null 2>&1 &
+    fi
 fi
 EOF
 chmod +x "$OPENCC_SCHEDULER_SCRIPT"
