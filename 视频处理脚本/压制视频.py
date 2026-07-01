@@ -40,6 +40,7 @@ CONFIG = {
     'FILENAME': {
         'NO_BAR': '投稿版',         # 投稿版（无进度条）
         'PREVIEW': '预览版',        # 网页预览（带进度条）
+        # PREVIEW_NO_BAR 使用同名 '预览版'，通过 mode 区分是否叠加进度条
     },
     
     # 高能进度条算法参数
@@ -354,22 +355,23 @@ def create_video(output_file, fps=1, resolution=(1920, 1080), folder_name='frame
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # 渲染视频（支持多个输出版本）
-def render_videos(original_video, overlay_video, ass_file, video_duration, output_with_bar=None, output_without_bar=None, output_preview=None, log_file=None):
+def render_videos(original_video, overlay_video, ass_file, video_duration, output_with_bar=None, output_without_bar=None, output_preview=None, output_preview_clean=None, log_file=None):
     """
     渲染视频，支持多种模式：
     - 仅投稿版（无进度条）：只提供 output_without_bar
     - 仅网页预览（带进度条）：只提供 output_preview
-    - 双版本：同时提供多个参数（投稿版 + 网页预览）
+    - 仅网页预览（无进度条）：只提供 output_preview_clean
+    - 多版本：同时提供多个参数
     
     参数:
         video_duration: 视频总时长（秒），用于计算压制进度
         log_file: 日志文件句柄
     """
-    if not output_with_bar and not output_without_bar and not output_preview:
+    if not output_with_bar and not output_without_bar and not output_preview and not output_preview_clean:
         raise ValueError("至少需要指定一个输出文件")
     
     # 统计需要输出的版本数量
-    output_count = sum([bool(output_with_bar), bool(output_without_bar), bool(output_preview)])
+    output_count = sum([bool(output_with_bar), bool(output_without_bar), bool(output_preview), bool(output_preview_clean)])
     
     # 构建滤镜链
     if output_count > 1:
@@ -381,6 +383,8 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
         if output_without_bar:
             split_count += 1
         if output_preview:
+            split_count += 1
+        if output_preview_clean:
             split_count += 1
         
         filter_parts = []
@@ -409,6 +413,14 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
             filter_parts.append(f'[v_scaled]ass={ass_file}[v_out_preview]')
             split_idx += 1
         
+        if output_preview_clean:
+            # 预览版无进度条：直接缩小分辨率 + 降帧率 + 弹幕
+            p_h = CONFIG['ENCODE']['PREVIEW_HEIGHT']
+            p_fps = CONFIG['ENCODE']['PREVIEW_FPS']
+            filter_parts.append(f'[{split_outputs[split_idx]}]scale=-2:{p_h},fps={p_fps}[v_scaled_clean]')
+            filter_parts.append(f'[v_scaled_clean]ass={ass_file}[v_out_preview_clean]')
+            split_idx += 1
+        
         filter_complex = ';'.join(filter_parts)
         inputs = ['-i', original_video, '-i', overlay_video] if overlay_video else ['-i', original_video]
     else:
@@ -420,6 +432,12 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
         elif output_without_bar:
             # 无进度条
             filter_complex = f'[0:v]ass={ass_file}[v_out_clean]'
+            inputs = ['-i', original_video]
+        elif output_preview_clean:
+            # 网页预览版（无进度条，480p, 24fps）
+            p_h = CONFIG['ENCODE']['PREVIEW_HEIGHT']
+            p_fps = CONFIG['ENCODE']['PREVIEW_FPS']
+            filter_complex = f'[0:v]scale=-2:{p_h},fps={p_fps}[v_scaled];[v_scaled]ass={ass_file}[v_out_preview_clean]'
             inputs = ['-i', original_video]
         else:  # output_preview
             # 网页预览版（带进度条，480p, 24fps）
@@ -475,7 +493,7 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
 
     # 生成进度日志文件路径（与输出视频同目录）
     # 使用第一个非空的输出文件路径
-    output_file_for_log = output_with_bar or output_without_bar or output_preview
+    output_file_for_log = output_with_bar or output_without_bar or output_preview or output_preview_clean
     progress_log = os.path.join(os.path.dirname(output_file_for_log), '压制进度.log')
     
     def parse_ffmpeg_progress(line):
@@ -700,6 +718,10 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
         qsv_command += get_output_args('[v_out_preview]', '0:a', 'h264_qsv', '800k', output_preview, is_preview=True)
         cpu_command += get_output_args('[v_out_preview]', '0:a', 'libx264', '800k', output_preview, is_preview=True)
 
+    if output_preview_clean:
+        qsv_command += get_output_args('[v_out_preview_clean]', '0:a', 'h264_qsv', '800k', output_preview_clean, is_preview=True)
+        cpu_command += get_output_args('[v_out_preview_clean]', '0:a', 'libx264', '800k', output_preview_clean, is_preview=True)
+
     if log_file:
         print(f"\n{'='*70}", file=log_file)
         print(f"🎬 开始压制视频", file=log_file)
@@ -717,6 +739,8 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
             log_file.write(f"输出文件 (投稿版， 无进度条): {output_without_bar}\n")
         if output_preview:
             log_file.write(f"输出文件 (网页预览， 带进度条): {output_preview}\n")
+        if output_preview_clean:
+            log_file.write(f"输出文件 (网页预览， 无进度条): {output_preview_clean}\n")
 
     # 运行 QSV 编码
     try:
@@ -739,6 +763,8 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
                     log_file.write(f"输出文件 (投稿版， 无进度条): {output_without_bar}\n")
                 if output_preview:
                     log_file.write(f"输出文件 (网页预览， 带进度条): {output_preview}\n")
+                if output_preview_clean:
+                    log_file.write(f"输出文件 (网页预览， 无进度条): {output_preview_clean}\n")
 
             cpu_result = run_ffmpeg_with_elegant_logging(cpu_command, log_file, video_duration)
             final_result = cpu_result
@@ -753,7 +779,9 @@ def render_videos(original_video, overlay_video, ass_file, video_duration, outpu
                 if output_without_bar:
                     log_file.write(f"   • 【投稿版】 {output_without_bar}\n")
                 if output_preview:
-                    log_file.write(f"   • 【网页预览】 {output_preview} (480p, 24fps)\n")
+                    log_file.write(f"   • 【网页预览(带进度条)】 {output_preview} (480p, 24fps)\n")
+                if output_preview_clean:
+                    log_file.write(f"   • 【网页预览(无进度条)】 {output_preview_clean} (480p, 24fps)\n")
                 log_file.write("=" * 70 + "\n\n")
             else:
                 log_file.write(f"\n⚠️ 压制失败 (返回码: {final_result})\n")
@@ -771,10 +799,12 @@ def main(xml_file, mode='both', danmaku_factory='/rec/apps/DanmakuFactory',
          font_size=50, opacity=200, output_dir=None, final_dir=None):
     """
     mode 参数:
-    - 'both': 生成两个版本（投稿版（无进度条）+ 网页预览（带进度条），默认）
-    - 'clean': 仅生成投稿版（无进度条）
-    - 'preview': 仅生成网页预览版本（480p, 24fps，带进度条）
-    - 'all': 生成所有支持的版本（同 both）
+    - 'both': 投稿版 + 预览版（无进度条，默认）
+    - 'both-bar': 投稿版 + 预览版（带进度条）
+    - 'clean': 仅投稿版
+    - 'preview': 仅预览版（带进度条）
+    - 'preview-clean': 仅预览版（无进度条）
+    - 'all': 同 both
     
     danmaku_factory: DanmakuFactory 可执行文件路径
     font_size: ASS 字体大小
@@ -852,8 +882,8 @@ def main(xml_file, mode='both', danmaku_factory='/rec/apps/DanmakuFactory',
                 final_output_dir = os.getcwd()
             # 注意：不要在此创建 final_output_dir 目录，成品目录仅在压制成功后创建/移动文件
             
-            # 判断是否需要生成进度条（仅预览版需要）
-            need_progress_bar = mode in ['both', 'all', 'preview']
+            # 判断是否需要生成进度条
+            need_progress_bar = mode in ['preview', 'both-bar']
             
             
             # 只有需要进度条时才生成图片和进度条视频
@@ -873,18 +903,20 @@ def main(xml_file, mode='both', danmaku_factory='/rec/apps/DanmakuFactory',
             # 说明：移除原带进度条的 "投稿版"，并将原来的 "切片版" 改名为 "投稿版"（无进度条）
             p_main = CONFIG['FILENAME']['NO_BAR']  # 切片版改名为投稿版
             p_preview = CONFIG['FILENAME']['PREVIEW']
-            temp_output_main = os.path.join(base_dir, f'{p_main}-{xml_base_name}.mp4') if mode in ['both', 'all', 'clean'] else None
-            temp_output_preview = os.path.join(base_dir, f'{p_preview}-{xml_base_name}.mp4') if mode in ['both', 'all', 'preview'] else None
+            temp_output_main = os.path.join(base_dir, f'{p_main}-{xml_base_name}.mp4') if mode in ['both', 'all', 'clean', 'both-bar'] else None
+            temp_output_preview = os.path.join(base_dir, f'{p_preview}-{xml_base_name}.mp4') if mode in ['preview', 'both-bar'] else None
+            temp_output_preview_clean = os.path.join(base_dir, f'{p_preview}-{xml_base_name}.mp4') if mode in ['both', 'all', 'preview-clean'] else None
 
             # 渲染视频（根据模式选择输出），先输出到 base_dir 的临时文件
             render_videos(
                 video_file,
-                overlay_video_file if need_progress_bar else None,  # 仅预览版需要进度条
+                overlay_video_file if need_progress_bar else None,  # 仅带进度条的预览版需要
                 ass_file,
                 video_duration,  # 视频时长，用于计算进度
                 output_with_bar=None,
                 output_without_bar=temp_output_main,
                 output_preview=temp_output_preview,
+                output_preview_clean=temp_output_preview_clean,
                 log_file=log_file
             )
 
@@ -893,7 +925,7 @@ def main(xml_file, mode='both', danmaku_factory='/rec/apps/DanmakuFactory',
                 try:
                     os.makedirs(final_dir, exist_ok=True)
                     moved = []
-                    for tmp, label in ((temp_output_main, '投稿版'), (temp_output_preview, '网页预览')):
+                    for tmp, label in ((temp_output_main, '投稿版'), (temp_output_preview, '网页预览(带进度条)'), (temp_output_preview_clean, '网页预览(无进度条)')):
                         if tmp and os.path.exists(tmp):
                             dest = os.path.join(final_dir, os.path.basename(tmp))
                             shutil.move(tmp, dest)
@@ -961,10 +993,11 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python 压制视频测试.py video.xml                  # 生成两个版本（投稿版（无进度条）+ 网页预览（带进度条））
-  python 压制视频测试.py video.xml --mode clean     # 仅生成投稿版（无进度条）
-  python 压制视频测试.py video.xml --mode preview   # 仅生成网页预览版本（480p）
-  python 压制视频测试.py video.xml --mode all       # 生成所有支持的版本（同 both）
+  python 压制视频测试.py video.xml                       # 投稿版 + 预览版(无进度条)
+  python 压制视频测试.py video.xml --mode both-bar       # 投稿版 + 预览版(带进度条)
+  python 压制视频测试.py video.xml --mode preview        # 仅预览版（带进度条）
+  python 压制视频测试.py video.xml --mode preview-clean  # 仅预览版（无进度条）
+  python 压制视频测试.py video.xml --mode clean          # 仅投稿版
   python 压制视频测试.py video.xml --font-size 60 --opacity 180  # 自定义弹幕样式
         """
     )
@@ -972,9 +1005,9 @@ if __name__ == "__main__":
     parser.add_argument('xml_file', help='XML弹幕文件路径')
     parser.add_argument(
         '--mode', 
-        choices=['both', 'all', 'clean', 'preview'],
+        choices=['both', 'all', 'clean', 'preview', 'preview-clean', 'both-bar'],
         default='both',
-        help='输出模式: both/all=投稿版(无进度条)+网页预览(带进度条), clean=仅投稿版(无进度条), preview=仅网页预览 (默认: both)'
+        help='输出模式: both/all=投稿版+预览版(无进度条), both-bar=投稿版+预览版(带进度条), clean=仅投稿版, preview=仅预览版(带进度条), preview-clean=仅预览版(无进度条) (默认: both)'
     )
     parser.add_argument(
         '--danmaku-factory',
