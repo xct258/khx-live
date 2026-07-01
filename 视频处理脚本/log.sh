@@ -7,9 +7,8 @@
 readonly _LOG_LOADED=1
 # 设置 _LOG_LOADED 为只读变量并赋值为1，标记脚本已加载
 
-# 日志保留数量
-_log_max_files=30
-# 设置最大保留日志文件数为5，超过的旧日志将被删除
+# 日志保留数量：支持外部通过 LOG_MAX_FILES 环境变量指定，未指定则默认为 30
+_log_max_files="${LOG_MAX_FILES:-30}"
 
 # 默认日志目录：支持外部通过 LOG_BASE_DIR 环境变量指定
 _log_base_dir="${LOG_BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[2]:-${BASH_SOURCE[1]}}")" && pwd)/logs}"

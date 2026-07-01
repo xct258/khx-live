@@ -567,6 +567,6 @@ else
 fi
 
 # 自动更新cookies
-/rec自动更新cookie.sh
+/rec/脚本/自动更新cookie.sh
 
 log info "脚本执行完毕"
