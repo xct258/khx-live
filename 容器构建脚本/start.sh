@@ -3,7 +3,7 @@
 # 启动时把构建时 version 信息移动到 /rec/version.txt
 mkdir -p /rec
 if [ -f /app/version.txt ]; then
-    cp /app/version.txt /rec/version.txt
+  cp /app/version.txt /rec/version.txt
 fi
 
 mkdir -p /rec/biliup/脚本
@@ -29,7 +29,7 @@ fi
 
 # 配置文件单独处理
 if [ ! -f /rec/config.conf ]; then
-    cp /opt/bililive/config/config.conf /rec/config.conf
+  cp /opt/bililive/config/config.conf /rec/config.conf
 fi
 
 STATUS_FILE="/app/.status"
@@ -65,65 +65,65 @@ fi
 
 # 在线切片安装
 if [ ! -f /rec/在线切片/app.py ]; then
-    cp /opt/webclip/app.py /rec/在线切片/app.py
+  cp /opt/webclip/app.py /rec/在线切片/app.py
 fi
 
 # 在线切片static静态文件安装
 for file in /opt/webclip/static/*; do
-    filename=$(basename "$file")
-    target="/rec/在线切片/static/$filename"
-    if [ -f "$file" ] && [ ! -f "$target" ]; then
-        cp "$file" "$target"
-    fi
+  filename=$(basename "$file")
+  target="/rec/在线切片/static/$filename"
+  if [ -f "$file" ] && [ ! -f "$target" ]; then
+    cp "$file" "$target"
+  fi
 done
 # 在线切片templates模板文件安装
 for file in /opt/webclip/templates/*; do
-    filename=$(basename "$file")
-    target="/rec/在线切片/templates/$filename"
-    if [ -f "$file" ] && [ ! -f "$target" ]; then
-        cp "$file" "$target"
-    fi
+  filename=$(basename "$file")
+  target="/rec/在线切片/templates/$filename"
+  if [ -f "$file" ] && [ ! -f "$target" ]; then
+    cp "$file" "$target"
+  fi
 done
 
 # 语音识别安装
 for file in /opt/opencc/*; do
-    filename=$(basename "$file")
-    target="/rec/语音识别/$filename"
-    if [ -f "$file" ] && [ ! -f "$target" ]; then
-        cp "$file" "$target"
-    fi
+  filename=$(basename "$file")
+  target="/rec/语音识别/$filename"
+  if [ -f "$file" ] && [ ! -f "$target" ]; then
+    cp "$file" "$target"
+  fi
 done
 
 # biliup安装
 if [ ! -f /rec/biliup/biliup ]; then
-    cp /root/biliup/biliup /rec/biliup/biliup
+  cp /root/biliup/biliup /rec/biliup/biliup
 fi
 
 # 复制 /opt/bililive/biliup 到 /rec/biliup/脚本
 for file in /opt/bililive/biliup/*; do
-    filename=$(basename "$file")
-    target="/rec/biliup/脚本/$filename"
-    if [ -f "$file" ] && [ ! -f "$target" ]; then
-        cp "$file" "$target"
-    fi
+  filename=$(basename "$file")
+  target="/rec/biliup/脚本/$filename"
+  if [ -f "$file" ] && [ ! -f "$target" ]; then
+    cp "$file" "$target"
+  fi
 done
 
 # 复制 /opt/bililive/scripts 到 /rec/脚本
 for file in /opt/bililive/scripts/*; do
-    filename=$(basename "$file")
-    target="/rec/脚本/$filename"
-    if [ -f "$file" ] && [ ! -f "$target" ]; then
-        cp "$file" "$target"
-    fi
+  filename=$(basename "$file")
+  target="/rec/脚本/$filename"
+  if [ -f "$file" ] && [ ! -f "$target" ]; then
+    cp "$file" "$target"
+  fi
 done
 
 # 复制 /opt/bililive/apps 到 /rec/apps
 for file in /opt/bililive/apps/*; do
-    filename=$(basename "$file")
-    target="/rec/apps/$filename"
-    if [ -f "$file" ] && [ ! -f "$target" ]; then
-        cp "$file" "$target"
-    fi
+  filename=$(basename "$file")
+  target="/rec/apps/$filename"
+  if [ -f "$file" ] && [ ! -f "$target" ]; then
+    cp "$file" "$target"
+  fi
 done
 
 # 下载私有配置文件（需 GitHub Token）
@@ -386,38 +386,38 @@ STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 
 if [[ -f "$CONFIG_FILE" ]]; then
-    source "$CONFIG_FILE"
+  source "$CONFIG_FILE"
 fi
 
 if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
-    # 检查是否已安装过
-    if ! grep -q "WEBCLIP_INSTALLED" "$STATUS_FILE"; then
-        echo "========================================="
-        echo "【子脚本】检测到开启在线切片，正在安装 Web 依赖..."
-        echo "========================================="
-        pip install \
-            fastapi \
-            uvicorn[standard] \
-            jinja2 \
-            pydantic \
-            python-multipart \
-            --break-system-packages
+  # 检查是否已安装过
+  if ! grep -q "WEBCLIP_INSTALLED" "$STATUS_FILE"; then
+    echo "========================================="
+    echo "【子脚本】检测到开启在线切片，正在安装 Web 依赖..."
+    echo "========================================="
+    pip install \
+      fastapi \
+      uvicorn[standard] \
+      jinja2 \
+      pydantic \
+      python-multipart \
+    --break-system-packages > /dev/null 2>&1
 
-        if [ $? -eq 0 ]; then
-            echo "WEBCLIP_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
-            echo "【成功】在线切片依赖安装完毕！"
-        else
-            echo "【错误】在线切片依赖安装失败！"
-            exit 1
-        fi
+    if [ $? -eq 0 ]; then
+      echo "WEBCLIP_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
+      echo "【成功】在线切片依赖安装完毕！"
+    else
+      echo "【错误】在线切片依赖安装失败！"
+      exit 1
     fi
+  fi
 
-    # 启动服务
-    if [[ -f "/rec/在线切片/app.py" ]]; then
-        echo "启动在线切片服务..."
-        port="${WEBCLIP_PORT:-8186}"
-        uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
-    fi
+  # 启动服务
+  if [[ -f "/rec/在线切片/app.py" ]]; then
+      echo "启动在线切片服务..."
+      port="${WEBCLIP_PORT:-8186}"
+      uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
+  fi
 fi
 EOF
 chmod +x "$WEBCLIP_SCHEDULER_SCRIPT"
@@ -432,35 +432,35 @@ STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 
 if [[ -f "$CONFIG_FILE" ]]; then
-    source "$CONFIG_FILE"
+  source "$CONFIG_FILE"
 fi
 
 if [[ "$ENABLE_OPENCC" = "true" ]]; then
-    # 检查是否已安装过
-    if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
-        echo "========================================="
-        echo "【子脚本】检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
-        echo "========================================="
-        pip install \
-            opencc \
-            torch \
-            faster_whisper \
-            --break-system-packages
+  # 检查是否已安装过
+if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
+  echo "========================================="
+  echo "【子脚本】检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
+  echo "========================================="
+  pip install \
+    opencc \
+    torch \
+    faster_whisper \
+  --break-system-packages > /dev/null 2>&1
 
-        if [ $? -eq 0 ]; then
-            echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
-            echo "【成功】语音识别依赖安装完毕！"
-        else
-            echo "【错误】语音识别依赖安装失败！"
-            exit 1
-        fi
-    fi
+  if [ $? -eq 0 ]; then
+    echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
+    echo "【成功】语音识别依赖安装完毕！"
+  else
+    echo "【错误】语音识别依赖安装失败！"
+    exit 1
+  fi
+fi
 
-    # 启动服务
-    if [[ -f "/rec/语音识别/app.py" ]]; then
-        echo "启动语音识别服务..."
-        python3 /rec/语音识别/app.py > /dev/null 2>&1 &
-    fi
+# 启动服务
+if [[ -f "/rec/语音识别/app.py" ]]; then
+  echo "启动语音识别服务..."
+  python3 /rec/语音识别/app.py > /dev/null 2>&1 &
+fi
 fi
 EOF
 chmod +x "$OPENCC_SCHEDULER_SCRIPT"
