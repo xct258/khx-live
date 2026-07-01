@@ -283,8 +283,12 @@ else
 
               if [[ "$IS_SAFE_TO_PROCESS" -eq 1 ]]; then
                 log info "开始弹幕压制：${cache_dir}"
-                # --mode clean: 只生成投稿版(无进度条)，不生成预览版(带进度条)。如需预览版改为 --mode both
-                if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode clean; then
+                # --mode both/all:       生成投稿版(无进度条) + 预览版(无进度条)
+                # --mode clean:          只生成投稿版(无进度条)，不生成预览版
+                # --mode both-bar:       生成投稿版(无进度条) + 预览版(带进度条)
+                # --mode preview:        只生成预览版(带进度条)
+                # --mode preview-clean:  只生成预览版(无进度条)
+                if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode both; then
                   if [[ -f "${cache_dir}/${output_file}" ]]; then
                     log success "视频弹幕压制完成：$output_file"
                     compressed_files+=("${cache_dir}/${output_file}")
