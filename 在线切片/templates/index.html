@@ -224,12 +224,19 @@
 
     <!-- 待合并片段弹窗 -->
     <div id="clipListModalOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
-        <div class="modal" style="width:min(680px, calc(100vw - 40px));">
-            <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between;">
+        <div class="modal clip-list-modal">
+            <div class="modal-header clip-list-modal-header">
                 <span id="clipListModalTitle">待合并片段</span>
+                <button id="clipListClearAllBtn" class="modal-btn" type="button" title="清空全部片段">清空</button>
                 <button id="clipListModalClose" class="modal-btn" type="button">×</button>
             </div>
-            <div id="clipListModalBody" class="modal-body" style="padding:8px 16px 14px 16px;"></div>
+            <div id="clipListModalBody" class="modal-body clip-list-modal-body"></div>
+            <div class="clip-list-modal-footer">
+                <button id="clipListPreviewAllBtn" class="modal-btn" type="button">预览全部</button>
+                <button id="clipListExportBtn" class="modal-btn" type="button">导出</button>
+                <button id="clipListImportBtn" class="modal-btn" type="button">导入</button>
+                <button id="clipListBatchDeleteBtn" class="modal-btn clip-list-batch-btn" type="button">勾选删除</button>
+            </div>
         </div>
     </div>
 
@@ -408,13 +415,14 @@
                     <h3 class="panel-title">字幕切片</h3>
                 </div>
                 <div id="subtitleToolbar" class="subtitle-toolbar" aria-label="字幕工具栏">
-                    <span id="subtitleToolbarHint" class="subtitle-toolbar-hint">请选择字幕</span>
+
                     <button id="subtitleToolbarPlayBtn" type="button" disabled>播放</button>
                     <button id="subtitleToolbarEditBtn" type="button" disabled>编辑</button>
                     <button id="subtitleToolbarAddBtn" type="button" disabled>添加片段</button>
                     <button id="subtitleToolbarSaveBtn" type="button" disabled>保存</button>
                     <button id="subtitleToolbarCancelBtn" type="button" disabled>取消</button>
                     <button id="subtitleToolbarDeleteBtn" type="button" disabled>删除</button>
+                    <div id="subtitleTimeEditBar" class="subtitle-time-edit-bar"></div>
                 </div>
                 <div id="subtitleListContainer" class="subtitle-list-scroll">
                     <div style="text-align:center; padding:20px; color:var(--muted-color);">暂无字幕数据</div>
@@ -422,6 +430,11 @@
                 <div id="subtitlePager" class="subtitle-pager" style="display:none;">
                     <button id="subtitlePrevPageBtn" type="button">上一页</button>
                     <span id="subtitlePageInfo" class="subtitle-page-info">第 1 / 1 页</span>
+                    <span style="display:flex; align-items:center; gap:4px;">
+                        <input id="subtitlePageJumpInput" type="text" placeholder="页码" class="subtitle-page-jump-input" title="输入页码后回车">
+                        <button id="subtitlePageJumpBtn" type="button" style="padding:3px 6px; font-size:12px;">跳转</button>
+                        <button id="subtitlePageUndoBtn" type="button" style="padding:3px 6px; font-size:12px; display:none;">撤回</button>
+                    </span>
                     <button id="subtitleNextPageBtn" type="button">下一页</button>
                 </div>
             </div>
@@ -459,17 +472,11 @@
                 </div>
 
                 <!-- 待合并片段列表 -->
-                <div style="margin-top:15px; display:flex; flex-direction:column; gap:8px;">
+                <div style="margin-top:15px;">
                     <button id="openClipListBtn" class="modal-btn"
                         style="width:100%; padding:10px; font-size:14px; text-align:center;">
                         待合并片段 (0)
                     </button>
-                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                        <button id="clipListPreviewAllBtn" class="modal-btn" style="font-size:12px; padding:4px 10px;">预览全部</button>
-                        <button id="clipListExportBtn" class="modal-btn" style="font-size:12px; padding:4px 10px;" onclick="__exportClips()">导出</button>
-                        <button id="clipListImportBtn" class="modal-btn" style="font-size:12px; padding:4px 10px;" onclick="__importClips()">导入</button>
-                        <button id="clipListClearAllBtn" class="modal-btn" style="font-size:12px; padding:4px 10px; background:rgba(255,50,50,0.3);">清空</button>
-                    </div>
                 </div>
             </div>
 
@@ -572,6 +579,39 @@
             </div>
             <div class="modal-footer progress-modal-footer">
                 <button id="cancelMergeBtnModalFixed" type="button" class="modal-btn modal-btn-danger">取消当前任务</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全部预览弹窗（连续播放所有片段） -->
+    <div id="allPreviewOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
+        <div class="modal all-preview-modal">
+            <div class="modal-header all-preview-modal-header">
+                <span id="allPreviewTitle">预览全部</span>
+                <span id="allPreviewProgress" class="all-preview-progress">片段 0/0</span>
+                <div style="flex:1; min-width:0;"></div>
+                <button id="allPreviewClose" class="modal-btn" type="button" title="关闭">×</button>
+            </div>
+            <div class="modal-body all-preview-modal-body">
+                <div class="all-preview-player-wrap">
+                    <video id="allPreviewPlayer" autoplay playsinline
+                        style="width:100%; display:block;"></video>
+                    <audio id="allPreviewAudio" preload="metadata" style="display:none;"></audio>
+                    <div class="all-preview-loading" id="allPreviewLoading">加载中...</div>
+                </div>
+                <div class="all-preview-clip-list" id="allPreviewClipList"></div>
+            </div>
+            <div class="all-preview-modal-footer">
+                <div class="all-preview-controls">
+                    <button id="allPreviewPlayBtn" class="all-preview-play-btn" type="button" title="播放/暂停">▶</button>
+                    <div class="all-preview-progress-wrap">
+                        <input type="range" id="allPreviewProgressBar" class="all-preview-progress-bar" value="0" min="0" step="0.01" aria-label="播放进度">
+                        <div id="allPreviewProgressFill" class="all-preview-progress-fill" style="width:0%"></div>
+                    </div>
+                    <span id="allPreviewTimeDisplay" class="all-preview-time">00:00</span>
+                </div>
+                <div class="all-preview-footer-info">
+                </div>
             </div>
         </div>
     </div>

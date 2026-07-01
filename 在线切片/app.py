@@ -922,7 +922,10 @@ def _thumb_bucket_dir(
     safe_name = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", base_name).strip(" .")
     if not safe_name:
         safe_name = "unknown-video"
-    out_dir = THUMB_CACHE_DIR / safe_name
+    # Each density/size/quality combination must use its own bucket. Otherwise
+    # 0000.jpg from an older step can be reused for a different timestamp.
+    bucket_name = f"d{int(round(duration))}_s{int(step_sec)}_w{int(width)}_h{int(height)}_q{int(quality)}"
+    out_dir = THUMB_CACHE_DIR / safe_name / bucket_name
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
 
@@ -1774,9 +1777,9 @@ async def video_fps(name: str):
 async def thumb_manifest(
     name: str,
     step: int = 30,
-    width: int = 128,
-    height: int = 72,
-    quality: int = 8,
+    width: int = 480,
+    height: int = 270,
+    quality: int = 10,
 ):
     if not ffmpeg_exists():
         raise HTTPException(status_code=500, detail="ffmpeg not found in PATH")
@@ -1785,10 +1788,10 @@ async def thumb_manifest(
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Video not found")
 
-    step = max(5, min(120, int(step or 30)))
-    width = max(64, min(480, int(width or 128)))
-    height = max(36, min(270, int(height or 72)))
-    quality = max(4, min(25, int(quality or 8)))
+    step = max(1, min(600, int(step or 30)))
+    width = max(64, min(640, int(width or 480)))
+    height = max(36, min(360, int(height or 270)))
+    quality = max(2, min(25, int(quality or 10)))
 
     duration = _ffprobe_duration(path)
     if duration <= 0:
@@ -1796,7 +1799,7 @@ async def thumb_manifest(
 
     marks = _build_thumb_marks(duration, step)
     out_dir = _thumb_bucket_dir(path, duration, step, width, height, quality)
-    bucket = out_dir.name
+    bucket = out_dir.relative_to(THUMB_CACHE_DIR).as_posix()
 
     thumbs: list[dict] = []
     for i, t in enumerate(marks):
@@ -1819,9 +1822,9 @@ async def thumb_manifest_stream(
     request: Request,
     name: str,
     step: int = 30,
-    width: int = 128,
-    height: int = 72,
-    quality: int = 8,
+    width: int = 480,
+    height: int = 270,
+    quality: int = 10,
 ):
     if not ffmpeg_exists():
         raise HTTPException(status_code=500, detail="ffmpeg not found in PATH")
@@ -1830,10 +1833,10 @@ async def thumb_manifest_stream(
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Video not found")
 
-    step = max(5, min(120, int(step or 30)))
-    width = max(64, min(480, int(width or 128)))
-    height = max(36, min(270, int(height or 72)))
-    quality = max(4, min(25, int(quality or 8)))
+    step = max(1, min(600, int(step or 30)))
+    width = max(64, min(640, int(width or 480)))
+    height = max(36, min(360, int(height or 270)))
+    quality = max(2, min(25, int(quality or 10)))
 
     duration = _ffprobe_duration(path)
     if duration <= 0:
@@ -1841,7 +1844,7 @@ async def thumb_manifest_stream(
 
     marks = _build_thumb_marks(duration, step)
     out_dir = _thumb_bucket_dir(path, duration, step, width, height, quality)
-    bucket = out_dir.name
+    bucket = out_dir.relative_to(THUMB_CACHE_DIR).as_posix()
 
     async def _iter_lines():
         meta = {
