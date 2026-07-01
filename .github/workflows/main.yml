@@ -52,7 +52,6 @@ jobs:
           images: ${{ env.DOCKERHUB_REPO }}
           tags: |
             type=raw,value=latest  # 固定标签 latest
-            #type=raw,value=${{ steps.date.outputs.today }}  # 使用日期作为 tag，比如 2025-05-03_00-00
 
       # Step 7: 构建并推送 Docker 镜像
       - name: Build and push Docker image
