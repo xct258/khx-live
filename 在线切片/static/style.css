@@ -2441,6 +2441,327 @@ pre {
     flex: 0 0 auto;
 }
 
+/* ===================== 待合并片段弹窗 (Clip List Modal) ===================== */
+.clip-list-modal {
+    width: min(680px, calc(100vw - 40px));
+    max-height: calc(100vh - 80px);
+    display: flex;
+    flex-direction: column;
+}
+
+.clip-list-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px 10px 16px;
+    flex-shrink: 0;
+}
+.clip-list-modal-header > #clipListModalTitle {
+    font-weight: 800;
+    font-size: 14px;
+    white-space: nowrap;
+}
+.clip-list-modal-header > #clipListClearAllBtn {
+    margin-left: auto;
+    padding: 4px 10px;
+    font-size: 11px;
+    background: rgba(255, 80, 80, 0.2);
+    border-color: rgba(255, 80, 80, 0.2);
+    color: #ff9999;
+    flex-shrink: 0;
+}
+.clip-list-modal-header > #clipListClearAllBtn:hover {
+    background: rgba(255, 80, 80, 0.35);
+}
+.clip-list-modal-header > #clipListClearAllBtn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+.clip-list-modal-header > #clipListModalClose {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    font-size: 14px;
+}
+
+.clip-list-modal-body {
+    padding: 0 12px 8px 12px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.clip-list-modal-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px 14px 16px;
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+.clip-list-modal-footer > .modal-btn {
+    font-size: 12px;
+    padding: 6px 12px;
+}
+.clip-list-modal-footer > .clip-list-batch-btn {
+    margin-left: auto;
+    background: rgba(255, 255, 255, 0.06);
+}
+.clip-list-modal-footer > .clip-list-batch-btn.active {
+    background: var(--accent-color);
+    border-color: transparent;
+}
+.clip-list-modal-footer > .clip-list-batch-btn.batch-delete {
+    margin-left: auto;
+    background: rgba(255, 80, 80, 0.3);
+    border-color: rgba(255, 80, 80, 0.3);
+    color: #ff9999;
+}
+
+/* ── 分组标题 ── */
+.clip-list-group-title {
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--accent-color);
+    padding: 6px 2px 2px 2px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    opacity: 0.85;
+    letter-spacing: 0.3px;
+}
+
+/* ── 片段卡片 ── */
+.clip-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--clip-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    transition: opacity 180ms ease, background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+    cursor: grab;
+    user-select: none;
+    position: relative;
+}
+.clip-card:active {
+    cursor: grabbing;
+}
+.clip-card:hover {
+    background: rgba(79, 158, 255, 0.08);
+    border-color: rgba(79, 158, 255, 0.2);
+}
+.clip-card.locked {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* 拖拽反馈 */
+.clip-card.dragging {
+    opacity: 0.35;
+    background: rgba(79, 158, 255, 0.05);
+}
+.clip-card.drag-before {
+    border-top: 2px solid var(--accent-color);
+}
+.clip-card.drag-after {
+    border-bottom: 2px solid var(--accent-color);
+}
+.clip-card.clip-selected {
+    background: rgba(79, 158, 255, 0.15);
+    border-color: var(--accent-color);
+}
+
+/* ── 片段卡片内容 ── */
+.clip-card .clip-checkbox {
+    flex-shrink: 0;
+    display: none;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+}
+.clip-list-batch-active .clip-card .clip-checkbox {
+    display: block;
+}
+
+.clip-card .clip-index {
+    flex-shrink: 0;
+    width: 22px;
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--accent-color);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.clip-card .clip-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.clip-card .clip-body-row1 {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.clip-card .clip-times {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--fg-color);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.clip-card .clip-duration {
+    font-size: 10px;
+    color: var(--muted-color);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.clip-card .clip-body-row2 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.clip-card .clip-frame {
+    font-size: 10px;
+    color: var(--muted-color);
+    opacity: 0.55;
+    font-variant-numeric: tabular-nums;
+}
+
+.clip-card .clip-subtitle-preview {
+    font-size: 10px;
+    color: var(--muted-color);
+    opacity: 0.65;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+.clip-card .clip-subtitle-preview::before {
+    content: "「";
+    opacity: 0.5;
+}
+.clip-card .clip-subtitle-preview::after {
+    content: "」";
+    opacity: 0.5;
+}
+
+.clip-card .clip-delete-btn {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    font-size: 13px;
+    line-height: 1.3;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--muted-color);
+    cursor: pointer;
+    opacity: 0.4;
+    transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+.clip-card:hover .clip-delete-btn {
+    opacity: 0.8;
+}
+.clip-card .clip-delete-btn:hover {
+    opacity: 1;
+    background: rgba(255, 80, 80, 0.2);
+    color: #ff7777;
+    border-color: rgba(255, 80, 80, 0.25);
+}
+
+/* ── 空状态 ── */
+.clip-list-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: var(--muted-color);
+    font-size: 13px;
+    text-align: center;
+    gap: 8px;
+    flex: 1;
+}
+.clip-list-empty-icon {
+    font-size: 28px;
+    opacity: 0.4;
+}
+
+/* ── 移动端适配 ── */
+@media (max-width: 560px) {
+    .clip-list-modal {
+        width: calc(100vw - 24px);
+        max-height: calc(100vh - 40px);
+    }
+    .clip-list-modal-body {
+        padding: 0 8px 6px 8px;
+        gap: 4px;
+    }
+    .clip-list-modal-footer {
+        padding: 8px 12px 12px 12px;
+        gap: 6px;
+    }
+    .clip-list-modal-footer > .modal-btn {
+        font-size: 11px;
+        padding: 5px 8px;
+    }
+    .clip-card {
+        padding: 6px 8px;
+        gap: 6px;
+    }
+    .clip-card .clip-index {
+        width: 18px;
+        font-size: 11px;
+    }
+    .clip-card .clip-times {
+        font-size: 11px;
+    }
+    .clip-card .clip-duration {
+        font-size: 9px;
+    }
+    .clip-card .clip-delete-btn {
+        font-size: 12px;
+        padding: 1px 5px;
+    }
+}
+
+@media (max-width: 400px) {
+    .clip-card .clip-body-row1 {
+        flex-direction: column;
+        gap: 1px;
+    }
+    .clip-card .clip-video-badge {
+        max-width: 100%;
+    }
+    .clip-list-modal-footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .clip-list-modal-footer > .clip-list-batch-btn {
+        margin-left: 0;
+    }
+}
+
 .clip-import-overlay {
     z-index: 11000;
 }
@@ -2575,7 +2896,321 @@ pre {
     border-radius: 0;
 }
 
+/* ===================== 全部预览弹窗 (All Preview Modal) ===================== */
+.all-preview-modal {
+    width: min(720px, calc(100vw - 40px));
+    max-height: calc(100vh - 60px);
+    display: flex;
+    flex-direction: column;
+}
+.all-preview-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px 8px 16px;
+    flex-shrink: 0;
+}
+.all-preview-modal-header > #allPreviewTitle {
+    font-weight: 800;
+    font-size: 14px;
+    white-space: nowrap;
+}
+.all-preview-progress {
+    font-size: 12px;
+    color: var(--muted-color);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.all-preview-modal-header > #allPreviewClose {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    font-size: 14px;
+}
+.all-preview-modal-body {
+    padding: 0;
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+.all-preview-player-wrap {
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+.all-preview-player-wrap > #allPreviewPlayer {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-height: 80vh;
+    object-fit: contain;
+}
+/* 音频模式隐藏黑框，列表占满 */
+.all-preview-modal-body.audio-mode .all-preview-player-wrap {
+    display: none;
+}
+.all-preview-modal-body.audio-mode .all-preview-clip-list {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    border-left: none;
+}
 
+/* ── 片段列表 ── */
+.all-preview-clip-list {
+    min-width: 200px;
+    width: max-content;
+    max-width: 40%;
+    flex-shrink: 0;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.08);
+    font-size: 11px;
+    border-left: 1px solid var(--border-color);
+}
+.all-preview-clip-group {
+    border-bottom: 1px solid var(--border-color);
+}
+.all-preview-clip-group:last-child {
+    border-bottom: none;
+}
+.all-preview-clip-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-color);
+    background: rgba(255,255,255,0.03);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.all-preview-clip-header .apch-toggle {
+    flex-shrink: 0;
+    font-size: 7px;
+    width: 12px;
+    text-align: center;
+    color: var(--muted-color);
+}
+.all-preview-clip-header .apch-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.all-preview-clip-body {
+    overflow: hidden;
+    transition: max-height 250ms ease;
+}
+.all-preview-clip-body.collapsed {
+    max-height: 0;
+}
+.all-preview-clip-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    padding: 5px 12px;
+    gap: 10px;
+    color: var(--muted-color);
+    transition: background 150ms ease, color 150ms ease;
+    min-height: 28px;
+    cursor: pointer;
+}
+.all-preview-clip-item:hover {
+    background: rgba(255,255,255,0.04);
+}
+.all-preview-clip-item.active {
+    background: rgba(79, 158, 255, 0.15);
+    color: var(--fg-color);
+}
+.all-preview-clip-item .apci-idx {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--accent-color);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.all-preview-clip-item .apci-time {
+    font-family: monospace;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.all-preview-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.5);
+    font-size: 13px;
+    background: rgba(0,0,0,0.3);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 200ms ease;
+}
+.all-preview-loading.show {
+    opacity: 1;
+}
+.all-preview-modal-footer {
+    padding: 0;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── 控制栏 ── */
+.all-preview-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 4px 14px;
+}
+.all-preview-play-btn {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.15);
+    cursor: pointer;
+    color: var(--fg-color);
+    transition: background 150ms ease;
+}
+.all-preview-play-btn:hover {
+    background: rgba(255,255,255,0.2);
+}
+
+.all-preview-progress-wrap {
+    flex: 1;
+    min-width: 0;
+    height: 4px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    position: relative;
+    cursor: pointer;
+}
+.all-preview-progress-bar {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    z-index: 2;
+    margin: 0;
+}
+.all-preview-progress-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: var(--accent-color);
+    border-radius: 2px;
+    pointer-events: none;
+    transition: width 100ms linear;
+    z-index: 1;
+}
+
+/* hover时进度条变高，便于交互 */
+.all-preview-progress-wrap:hover {
+    height: 6px;
+}
+
+.all-preview-time {
+    flex-shrink: 0;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--muted-color);
+    font-variant-numeric: tabular-nums;
+    min-width: 5em;
+    text-align: right;
+}
+
+/* ── 信息栏 ── */
+.all-preview-footer-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 14px 10px 14px;
+}
+.all-preview-progress {
+    font-size: 11px;
+    color: var(--muted-color);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+    .all-preview-modal {
+        width: calc(100vw - 24px);
+    }
+    .all-preview-modal-body {
+        flex-direction: column;
+    }
+    .all-preview-player-wrap > #allPreviewPlayer {
+        max-height: 40vh;
+        height: auto;
+    }
+    .all-preview-clip-list {
+        width: auto;
+        flex: 1;
+        min-width: 0;
+        max-width: none;
+        border-left: none;
+        border-top: 1px solid var(--border-color);
+    }
+    .all-preview-clip-item {
+        font-size: 12px;
+        padding: 4px 12px;
+        min-height: 26px;
+    }
+    .all-preview-clip-item .apci-idx {
+        font-size: 11px;
+    }
+    .all-preview-clip-item .apci-time {
+        font-size: 11px;
+    }
+    .all-preview-controls {
+        padding: 6px 10px 2px 10px;
+        gap: 6px;
+    }
+    .all-preview-play-btn {
+        width: 26px;
+        height: 26px;
+        font-size: 12px;
+    }
+    .all-preview-time {
+        font-size: 10px;
+        min-width: 4em;
+    }
+    .all-preview-footer-info {
+        padding: 2px 10px 8px 10px;
+    }
+    .all-preview-progress {
+        font-size: 10px;
+    }
+}
 .cover-upload-wrapper {
     margin-bottom: 8px;
     display: flex;
@@ -3457,16 +4092,33 @@ pre {
     overscroll-behavior: contain;
 }
 
+.subtitle-page-jump-input {
+    width: 52px;
+    padding: 3px 5px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--text-color);
+    outline: none;
+    text-align: center;
+    transition: border-color 150ms ease;
+}
+
+.subtitle-page-jump-input:focus {
+    border-color: var(--accent-color);
+}
+
 .subtitle-pager {
-    display: grid;
-    grid-template-columns: minmax(76px, auto) minmax(120px, 1fr) minmax(76px, auto);
+    display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     margin-top: 10px;
     padding: 8px;
     border-radius: var(--radius-sm);
     background: rgba(0, 0, 0, 0.14);
     border: 1px solid rgba(255, 255, 255, 0.08);
+    flex-wrap: wrap;
 }
 
 .subtitle-pager button {
@@ -3488,6 +4140,7 @@ pre {
     min-width: 0;
     overflow: hidden;
     text-align: center;
+    flex: 1;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -3589,7 +4242,6 @@ pre {
 }
 
 .subtitle-list-item .sub-time-value {
-    cursor: text;
     padding: 1px 3px;
     border-radius: 3px;
     transition: background 150ms ease, outline-color 150ms ease;
@@ -3707,6 +4359,27 @@ pre {
 }
 
 /* 字幕编辑模式输入框 */
+.subtitle-list-item .sub-time-btn {
+    font-family: monospace;
+    font-size: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    color: var(--fg-color);
+    padding: 1px 4px;
+    cursor: pointer;
+    line-height: 1.4;
+    opacity: 0.7;
+    transition: opacity 150ms ease, background 150ms ease;
+}
+.subtitle-list-item .sub-time-btn:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.15);
+}
+.subtitle-list-item .sub-time-btn:active {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+}
 .subtitle-list-item .sub-time-input {
     font-family: monospace;
     font-size: 11px;
@@ -3746,11 +4419,17 @@ pre {
     border-color: var(--accent-color);
 }
 
+/* 字幕编辑时间栏（默认隐藏，移动端编辑时显示在工具栏内） */
+.subtitle-time-edit-bar {
+    display: none;
+}
+
 /* 移动端：字幕编辑时紧凑布局 */
 @media (max-width: 480px) {
     .subtitle-toolbar {
         align-items: flex-start;
         gap: 4px;
+        flex-wrap: wrap;
     }
     .subtitle-toolbar-hint {
         flex-basis: 100%;
@@ -3763,8 +4442,9 @@ pre {
         flex: 1 1 calc(100% - 34px);
     }
     .subtitle-list-item .sub-time-input {
-        width: 6em;
+        width: 8em;
         font-size: 10px;
+        flex-shrink: 0;
     }
     .subtitle-list-item .sub-save-btn,
     .subtitle-list-item .sub-cancel-btn,
@@ -3793,6 +4473,64 @@ pre {
     }
     .subtitle-pager button {
         width: 100%;
+    }
+
+    .subtitle-time-edit-bar {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        flex: 1 1 100%;
+        order: 99;
+        overflow: auto;
+        padding: 2px 0;
+    }
+    .subtitle-time-edit-bar:empty {
+        display: none;
+    }
+    .subtitle-time-edit-bar .sub-time-btn {
+        flex-shrink: 0;
+        font-size: 0;
+        min-width: 26px;
+        text-align: center;
+    }
+    .subtitle-time-edit-bar .sub-time-btn::before {
+        font-size: 13px;
+        line-height: 1;
+    }
+    .subtitle-time-edit-bar .sub-time-btn[data-step^="-"]::before {
+        content: "−";
+    }
+    .subtitle-time-edit-bar .sub-time-btn:not([data-step^="-"])::before {
+        content: "+";
+    }
+    .subtitle-time-edit-bar .sub-time-input {
+        width: 6.5em;
+        font-size: 10px;
+        flex-shrink: 0;
+    }
+}
+
+/* 窄屏：字幕编辑模式下时间按钮仅显示 +/- 以节省空间 */
+@media (max-width: 560px) {
+    .subtitle-list-item .sub-time-btn {
+        font-size: 0;
+        min-width: 22px;
+        padding: 1px 3px;
+        text-align: center;
+    }
+    .subtitle-list-item .sub-time-btn[data-step^="-"]::before {
+        content: "−";
+        font-size: 12px;
+        line-height: 1;
+    }
+    .subtitle-list-item .sub-time-btn:not([data-step^="-"])::before {
+        content: "+";
+        font-size: 12px;
+        line-height: 1;
+    }
+    .subtitle-list-item .sub-time-input {
+        width: 8em;
+        font-size: 10px;
     }
 }
 
@@ -4692,6 +5430,7 @@ pre {
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
+    image-rendering: auto;
     /* 缩略图始终不透明 */
     opacity: 1;
     /* 去掉滤镜，避免看起来暗淡/半透明 */

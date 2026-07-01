@@ -1336,11 +1336,13 @@ function __clearProgressSingle() {
     }
 }
 
-function __saveProgress(videoName, currentTime, duration) {
+function __saveProgress(videoName, currentTime, duration, options) {
     if (!videoName) return;
+    const opts = options && typeof options === 'object' ? options : {};
     const t = Number(currentTime);
     const d = Number(duration);
-    if (!Number.isFinite(t) || t < VIDEO_PROGRESS_MIN_SAVE_SECONDS) return;
+    if (!Number.isFinite(t) || t < 0) return;
+    if (!opts.allowEarly && t < VIDEO_PROGRESS_MIN_SAVE_SECONDS) return;
 
     // 播放到末尾附近：认为已看完，清除进度，避免下次从结尾继续
     if (Number.isFinite(d) && d > 0 && t >= Math.max(0, d - VIDEO_PROGRESS_CLEAR_NEAR_END_SECONDS)) {
@@ -1362,6 +1364,44 @@ function __saveProgress(videoName, currentTime, duration) {
     }
 }
 
+function __getCurrentVideoDurationForProgress() {
+    try {
+        const d = Number(player && player.duration);
+        return Number.isFinite(d) && d > 0 ? d : 0;
+    } catch (e) {
+        return 0;
+    }
+}
+
+function __getSubtitlePageProgressTime() {
+    if (!__subtitleData || !__subtitleData.length) return NaN;
+    const firstIdx = __subtitlePageIndex * __subtitlePageSize;
+    if (firstIdx < 0 || firstIdx >= __subtitleData.length) return NaN;
+
+    try {
+        const t = Number(player && player.currentTime);
+        const idx = Number.isFinite(t) ? __findSubtitleIndex(t) : -1;
+        if (idx >= firstIdx && idx < Math.min(__subtitleData.length, firstIdx + __subtitlePageSize)) {
+            return t;
+        }
+    } catch (e) { }
+
+    return Number(__subtitleData[firstIdx].start);
+}
+
+function __saveSubtitlePageProgress() {
+    const t = __getSubtitlePageProgressTime();
+    if (!Number.isFinite(t) || t < 0) return;
+    __saveProgress(currentVideoName, t, __getCurrentVideoDurationForProgress(), { allowEarly: true });
+}
+
+function __saveSubtitleIndexProgress(idx) {
+    if (!__subtitleData || idx < 0 || idx >= __subtitleData.length) return;
+    const t = Number(__subtitleData[idx].start);
+    if (!Number.isFinite(t) || t < 0) return;
+    __saveProgress(currentVideoName, t, __getCurrentVideoDurationForProgress(), { allowEarly: true });
+}
+
 function __maybeRestoreProgress() {
     if (!__restoreProgressForVideo) return;
     if (!currentVideoName || __restoreProgressForVideo !== currentVideoName) return;
@@ -1373,7 +1413,7 @@ function __maybeRestoreProgress() {
 
     const d = Number(player.duration);
     const target = Number(saved.t);
-    if (!Number.isFinite(target) || target < VIDEO_PROGRESS_MIN_SAVE_SECONDS) return;
+    if (!Number.isFinite(target) || target < 0) return;
     if (Number.isFinite(d) && d > 0 && target >= d - VIDEO_PROGRESS_CLEAR_NEAR_END_SECONDS) return;
 
     // 仅在 metadata ready 后设置 currentTime 才可靠
@@ -4308,9 +4348,108 @@ function __withStablePageScroll(fn) {
 }
 
 // ------------------ 渲染片段列表 (重构) ------------------
+// ── 批量删除状态 ──
+let __clipListBatchMode = false;
+let __clipListSelected = new Set();
+
+function __resetClipListBatchMode() {
+    __clipListBatchMode = false;
+    __clipListSelected = new Set();
+    const footer = document.querySelector('.clip-list-modal-footer');
+    if (footer) footer.classList.remove('clip-list-batch-active');
+    const overlay = document.getElementById('clipListModalOverlay');
+    if (overlay) overlay.classList.remove('clip-list-batch-active');
+    const batchBtn = document.getElementById('clipListBatchDeleteBtn');
+    if (batchBtn) {
+        batchBtn.textContent = '勾选删除';
+        batchBtn.classList.remove('batch-delete', 'active');
+    }
+}
+
+function __toggleClipListBatchMode() {
+    __clipListBatchMode = !__clipListBatchMode;
+    if (!__clipListBatchMode) {
+        __clipListSelected = new Set();
+    }
+    const footer = document.querySelector('.clip-list-modal-footer');
+    if (footer) footer.classList.toggle('clip-list-batch-active', __clipListBatchMode);
+    const overlay = document.getElementById('clipListModalOverlay');
+    if (overlay) overlay.classList.toggle('clip-list-batch-active', __clipListBatchMode);
+    const batchBtn = document.getElementById('clipListBatchDeleteBtn');
+    if (batchBtn) {
+        if (__clipListBatchMode) {
+            batchBtn.textContent = '取消';
+            batchBtn.classList.add('active');
+        } else {
+            batchBtn.textContent = '勾选删除';
+            batchBtn.classList.remove('batch-delete', 'active');
+        }
+    }
+    __syncBatchDeleteButton();
+}
+
+function __syncBatchDeleteButton() {
+    const batchBtn = document.getElementById('clipListBatchDeleteBtn');
+    if (!batchBtn || !__clipListBatchMode) return;
+    const count = __clipListSelected.size;
+    if (count > 0) {
+        batchBtn.textContent = `删除 ${count} 个`;
+        batchBtn.classList.add('batch-delete');
+    } else {
+        batchBtn.textContent = '取消';
+        batchBtn.classList.remove('batch-delete');
+    }
+}
+
+function __toggleClipSelection(globalIdx) {
+    if (!__clipListBatchMode) return;
+    if (__clipListSelected.has(globalIdx)) {
+        __clipListSelected.delete(globalIdx);
+    } else {
+        __clipListSelected.add(globalIdx);
+    }
+    __syncBatchDeleteButton();
+    // update checkbox visual
+    const card = newClipListContainer.querySelector(`.clip-card[data-gidx="${globalIdx}"]`);
+    if (card) {
+        const cb = card.querySelector('.clip-checkbox');
+        if (cb) cb.checked = __clipListSelected.has(globalIdx);
+        card.classList.toggle('clip-selected', __clipListSelected.has(globalIdx));
+    }
+}
+
+function __formatDuration(seconds) {
+    const s = Math.round(Number(seconds));
+    if (!Number.isFinite(s) || s < 0) return '0s';
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    const rs = s % 60;
+    if (m < 60) return rs > 0 ? `${m}m ${rs}s` : `${m}m`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+}
+
+function __createClipListEmptyEl() {
+    const el = document.createElement('div');
+    el.className = 'clip-list-empty';
+    el.innerHTML = '<div class="clip-list-empty-icon">📋</div><div>暂无待合并片段</div>';
+    return el;
+}
+
+function __getSubtitlePreviewForClip(start, end) {
+    if (!__subtitleData || !__subtitleData.length) return '';
+    for (const s of __subtitleData) {
+        if (s.start < end && s.end > start) {
+            const t = String(s.text || '').trim();
+            if (t) return t;
+        }
+    }
+    return '';
+}
+
 function renderNewClipList() {
     const scrollState = __capturePageScrollState();
-    var frag = document.createDocumentFragment();
 
     var totalClips = __getTotalClipCountFromVideoTasks();
     if (openClipListBtn) {
@@ -4318,21 +4457,24 @@ function renderNewClipList() {
         openClipListBtn.disabled = false;
     }
 
-    // 若存在合法的顺序覆盖，则先把 videoTasks 同步为该顺序，保证主列表/预览/提交一致
+    // clean up stale selection indices
+    const flat = __flattenVideoTasksToClips();
+    for (const idx of __clipListSelected) {
+        if (idx < 0 || idx >= flat.length) __clipListSelected.delete(idx);
+    }
+    __syncBatchDeleteButton();
 
-    // 过滤掉空任务，避免显示空行
-    // 但不要永久删除，因为可能用户正在操作
     const validTasks = videoTasks.filter(v => v.clips.length > 0);
 
     if (validTasks.length === 0) {
         try { __updateSubtitleSliceState(); } catch (e) { }
-        newClipListContainer.replaceChildren();
+        newClipListContainer.replaceChildren(__createClipListEmptyEl());
         __restorePageScrollStateSoon(scrollState);
         return;
     }
 
-    let globalClipIndex = 0; // 全局计数器
-
+    const frag = document.createDocumentFragment();
+    let globalClipIndex = 0;
     let __mainListDragFromIndex = null;
 
     const reorderByGlobalIndex = (fromIdx, toIdx) => {
@@ -4340,116 +4482,146 @@ function renderNewClipList() {
             showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
             return;
         }
-
         const from = Number(fromIdx);
         const to = Number(toIdx);
         if (!Number.isFinite(from) || !Number.isFinite(to)) return;
         if (from === to) return;
 
-        const flat = __flattenVideoTasksToClips();
+        // flatten with references to actual clip objects
+        const flat = [];
+        for (const task of videoTasks) {
+            for (const clip of task.clips) {
+                flat.push({ name: task.name, clip });
+            }
+        }
         if (from < 0 || from >= flat.length) return;
         if (to < 0 || to >= flat.length) return;
 
+        // reorder
         const moving = flat.splice(from, 1)[0];
         flat.splice(to, 0, moving);
+
+        // rebuild videoTasks, grouping consecutive clips with same video name
+        const newTasks = [];
+        let currentTask = null;
+        for (const item of flat) {
+            if (!currentTask || currentTask.name !== item.name) {
+                currentTask = { name: item.name, clips: [] };
+                newTasks.push(currentTask);
+            }
+            currentTask.clips.push(item.clip);
+        }
+        videoTasks = newTasks;
+
         renderNewClipList();
         __saveClipToolState();
-
-        // 直接显示 "片段 X 移动到 片段 Y"
         showToast(`片段 ${from + 1} 移动到 片段 ${to + 1}`, 'info', 3000);
     };
 
-    // 如果相邻的两个任务是同一个视频，其实在显示上可以合并，
-    // 但由于我们的逻辑是 A->B->A，所以不应该合并。这里直接按 videoTasks 顺序渲染即可。
+    const clearDragState = () => {
+        __mainListDragFromIndex = null;
+        newClipListContainer.querySelectorAll('.clip-card.dragging, .clip-card.drag-before, .clip-card.drag-after')
+            .forEach(el => el.classList.remove('dragging', 'drag-before', 'drag-after'));
+    };
+
+    const isLocked = __isClipEditLocked();
 
     videoTasks.forEach((video, taskIdx) => {
         if (video.clips.length === 0) return;
 
-        const vidGroup = document.createElement('div');
-        vidGroup.style.marginBottom = '10px';
-        vidGroup.innerHTML = `<div style="font-weight:bold; font-size:13px; color:var(--accent-color); margin-bottom:4px; white-space:normal; overflow-wrap:anywhere; word-break:break-word;">${video.name}</div>`;
+        // group title
+        const title = document.createElement('div');
+        title.className = 'clip-list-group-title';
+        title.textContent = video.name;
+        frag.appendChild(title);
 
         video.clips.forEach((c, clipIdx) => {
-            globalClipIndex++; // 递增全局序号
+            globalClipIndex++;
             const globalIdx = globalClipIndex - 1;
 
-            const item = document.createElement('div');
-            item.className = 'glass';
-            item.style.padding = '8px';
-            item.style.marginBottom = '6px';
-            item.style.display = 'flex';
-            item.style.justifyContent = 'space-between';
-            item.style.alignItems = 'center';
-            item.draggable = true;
-            item.dataset.gidx = String(globalIdx);
+            const card = document.createElement('div');
+            card.className = 'clip-card';
+            card.dataset.gidx = String(globalIdx);
+            if (isLocked) card.classList.add('locked');
+            else card.draggable = true;
 
-            // 拖拽排序（全局顺序）
-            item.addEventListener('dragstart', (e) => {
-                if (__isClipEditLocked()) {
-                    showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
-                    e.preventDefault();
-                    return;
-                }
-
-                __mainListDragFromIndex = globalIdx;
-                try {
-                    e.dataTransfer.effectAllowed = 'move';
-                    e.dataTransfer.setData('text/plain', String(globalIdx));
-                } catch (err) { }
-            });
-            item.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                try { e.dataTransfer.dropEffect = 'move'; } catch (err) { }
-            });
-            item.addEventListener('drop', (e) => {
-                e.preventDefault();
-                if (__isClipEditLocked()) {
-                    showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
-                    return;
-                }
-
-                const from = __mainListDragFromIndex;
-                __mainListDragFromIndex = null;
-                if (from === null || from === undefined) return;
-                reorderByGlobalIndex(from, globalIdx);
-            });
-            item.addEventListener('dragend', () => {
-                __mainListDragFromIndex = null;
+            // ── checkbox (batch mode) ──
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'clip-checkbox';
+            cb.checked = __clipListSelected.has(globalIdx);
+            cb.addEventListener('change', (e) => {
+                e.stopPropagation();
+                if (!__clipListBatchMode) return;
+                __toggleClipSelection(globalIdx);
             });
 
-            const info = document.createElement('div');
-            let fn = '';
+            // ── index ──
+            const idxEl = document.createElement('span');
+            idxEl.className = 'clip-index';
+            idxEl.textContent = String(globalClipIndex);
+
+            // ── body ──
+            const body = document.createElement('div');
+            body.className = 'clip-body';
+
+            // row1: times + duration
+            const row1 = document.createElement('div');
+            row1.className = 'clip-body-row1';
+
+            const times = document.createElement('span');
+            times.className = 'clip-times';
+            times.textContent = `${formatSubtitleTime(c.start)} – ${formatSubtitleTime(c.end)}`;
+
+            const dur = document.createElement('span');
+            dur.className = 'clip-duration';
+            dur.textContent = __formatDuration(c.end - c.start);
+
+            row1.appendChild(times);
+            row1.appendChild(dur);
+
+            // row2: frame info + subtitle preview
+            const row2 = document.createElement('div');
+            row2.className = 'clip-body-row2';
+
+            let frameText = '';
             if (c._frameStart != null && c._frameEnd != null) {
-                fn = ` <span style="font-size:10px; opacity:0.45;">#${c._frameStart}→${c._frameEnd}</span>`;
+                frameText = `#${c._frameStart}→${c._frameEnd}`;
             } else {
                 const fps = __getVideoFpsSync();
                 const sf = fps > 0 ? Math.round(c.start * fps) : null;
                 const ef = fps > 0 ? Math.round(c.end * fps) : null;
-                if (sf !== null && ef !== null) fn = ` <span style="font-size:10px; opacity:0.45;">#${sf}→${ef}</span>`;
+                if (sf !== null && ef !== null) frameText = `#${sf}→${ef}`;
             }
-            info.innerHTML = `
-                <span style="display:inline-block; width:20px; font-weight:bold; color:var(--accent-color);">${globalClipIndex}.</span>
-                <span style="font-family:monospace;">${formatTime(c.start)}</span> 
-                –
-                <span style="font-family:monospace;">${formatTime(c.end)}</span>${fn}
-            `;
+            if (frameText) {
+                const frameEl = document.createElement('span');
+                frameEl.className = 'clip-frame';
+                frameEl.textContent = frameText;
+                row2.appendChild(frameEl);
+            }
 
+            const subText = __getSubtitlePreviewForClip(c.start, c.end);
+            if (subText) {
+                const subEl = document.createElement('span');
+                subEl.className = 'clip-subtitle-preview';
+                subEl.textContent = subText;
+                row2.appendChild(subEl);
+            }
+
+            body.appendChild(row1);
+            body.appendChild(row2);
+
+            // ── delete button ──
             const delBtn = document.createElement('button');
+            delBtn.className = 'clip-delete-btn';
             delBtn.textContent = '×';
-            delBtn.style.padding = '2px 8px';
-            delBtn.style.marginLeft = '10px';
             delBtn.title = '删除此片段';
-            delBtn.style.background = 'rgba(255, 100, 100, 0.2)';
-            delBtn.addEventListener('click', async () => {
-// 运行态/排队态保护：正在切片或已在队列中时禁止删除片段并以弹窗提示
-            try {
+            delBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
                 if (__isClipEditLocked()) {
                     showAlertModal('当前正在切片或已有合并任务排队，无法删除片段');
-                        return;
-                    }
-                } catch (e) { /* ignore and proceed */ }
-
-                // 确认删除（显示片段时长以便识别）
+                    return;
+                }
                 try {
                     const startText = formatTime(c.start);
                     const endText = formatTime(c.end);
@@ -4469,26 +4641,88 @@ function renderNewClipList() {
                     }
                     const ok = await showConfirmModal(`文件：${fileName}\n片段：${startText} - ${endText}${subLines}\n\n确定要删除该片段吗？`, { title: '删除确认', okText: '删除', cancelText: '取消' });
                     if (!ok) return;
-                } catch (e) {
-                    // 若弹窗不可用则降级：直接返回（避免误删）
-                    return;
-                }
+                } catch (e) { return; }
 
                 video.clips.splice(clipIdx, 1);
                 if (video.clips.length === 0) {
                     videoTasks.splice(taskIdx, 1);
                 }
+                __clipListSelected.delete(globalIdx - 1);
                 renderNewClipList();
-__saveClipToolState();
+                __saveClipToolState();
                 showToast('片段已删除');
             });
 
-            item.appendChild(info);
-            item.appendChild(delBtn);
-            vidGroup.appendChild(item);
+            // ── drag events ──
+            if (!isLocked) {
+                card.addEventListener('dragstart', (e) => {
+                    if (__isClipEditLocked()) {
+                        showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
+                        e.preventDefault();
+                        return;
+                    }
+                    __mainListDragFromIndex = globalIdx;
+                    card.classList.add('dragging');
+                    try {
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', String(globalIdx));
+                    } catch (err) { }
+                });
+
+                card.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    try { e.dataTransfer.dropEffect = 'move'; } catch (err) { }
+                    if (__mainListDragFromIndex === null) return;
+                    const rect = card.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const mid = rect.height / 2;
+                    card.classList.toggle('drag-before', y <= mid);
+                    card.classList.toggle('drag-after', y > mid);
+                });
+
+                card.addEventListener('dragleave', () => {
+                    card.classList.remove('drag-before', 'drag-after');
+                });
+
+                card.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    if (__isClipEditLocked()) {
+                        showAlertModal('当前正在切片或已有合并任务排队，无法调整片段顺序');
+                        clearDragState();
+                        return;
+                    }
+                    const from = __mainListDragFromIndex;
+                    let to = globalIdx;
+                    if (card.classList.contains('drag-after')) {
+                        to = globalIdx + 1;
+                    }
+                    clearDragState();
+                    if (from === null || from === undefined) return;
+                    reorderByGlobalIndex(from, to);
+                });
+
+                card.addEventListener('dragend', () => {
+                    clearDragState();
+                });
+            }
+
+            // ── click for batch select ──
+            if (!isLocked) {
+                card.addEventListener('click', () => {
+                    if (__clipListBatchMode) {
+                        __toggleClipSelection(globalIdx);
+                    }
+                });
+            }
+
+            card.appendChild(cb);
+            card.appendChild(idxEl);
+            card.appendChild(body);
+            card.appendChild(delBtn);
+            frag.appendChild(card);
         });
-        frag.appendChild(vidGroup);
     });
+
     try { __updateSubtitleSliceState(); } catch (e) { }
     newClipListContainer.replaceChildren(frag);
     __restorePageScrollStateSoon(scrollState);
@@ -5009,7 +5243,7 @@ if (setStartBtn) {
 
         const r = __getCurrentPlayTime(); tempStart = r.time; tempStartFrame = r.frame;
         updateClipInputs();
-        showToast(`起点: ${formatTime(r.time)} 帧#${r.frame} (t=${r.t?.toFixed(2)} fps=${r.fps})`);
+        showToast(`起点: ${formatTime(r.time)}`);
 
         // 如果终点已设，自动尝试添加片段
         if (tempEnd !== null) {
@@ -5044,7 +5278,7 @@ if (setEndBtn) {
 
         const r = __getCurrentPlayTime(); tempEnd = r.time; tempEndFrame = r.frame;
         updateClipInputs();
-        showToast(`终点: ${formatTime(r.time)} 帧#${r.frame} (t=${r.t?.toFixed(2)} fps=${r.fps})`);
+        showToast(`终点: ${formatTime(r.time)}`);
     });
 }
 
@@ -5131,7 +5365,6 @@ async function __doAddClip({ silent = false } = {}) {
 confirmAddClipBtn.addEventListener('click', () => __doAddClip());
 
 clearAllClipsFn.addEventListener('click', async () => {
-    // 运行态/排队态保护：正在切片或已有合并任务排队时禁止清空并提示用户
     try {
         if (__isClipEditLocked()) {
             showAlertModal('当前正在切片或已有合并任务排队，无法清空片段');
@@ -5145,9 +5378,9 @@ clearAllClipsFn.addEventListener('click', async () => {
         cancelText: '取消'
     });
     if (ok) {
-        // 直接清空任务列表：避免残留空任务导致仍可提交
         videoTasks = [];
-renderNewClipList();
+        __resetClipListBatchMode();
+        renderNewClipList();
         __saveClipToolState();
         showToast('已清空');
     }
@@ -5156,9 +5389,434 @@ renderNewClipList();
 const previewAllClipsBtn = document.getElementById('clipListPreviewAllBtn');
 if (previewAllClipsBtn) {
     previewAllClipsBtn.addEventListener('click', () => {
-        if (typeof window.__tlPlayAllClips === 'function') window.__tlPlayAllClips();
+        __openAllPreviewModal();
     });
 }
+
+// ── 全部预览弹窗（独立播放器，连续播放所有片段）──
+let __allModalPlaybackClips = null;
+let __allModalPlaybackToken = 0;
+let __allModalRafId = null;
+let __allModalUserPaused = false;
+let __allModalCumulative = []; // cumulative offset of each clip's start within total timeline
+let __allModalTotalDur = 0;
+
+function __buildAllModalCumulative(clips) {
+    const cum = [];
+    let acc = 0;
+    for (const c of clips) {
+        cum.push(acc);
+        acc += Math.max(0, c.end - c.start);
+    }
+    return { cum, total: acc };
+}
+
+function __seekAllModalToGlobal(pct) {
+    const clips = __allModalPlaybackClips;
+    const cum = __allModalCumulative;
+    const total = __allModalTotalDur;
+    if (!clips || !cum.length || total <= 0) return;
+    const target = (pct / 100) * total;
+    // find clip
+    let clipIdx = cum.length - 1;
+    for (let i = 0; i < cum.length; i++) {
+        const cEnd = cum[i] + Math.max(0, clips[i].end - clips[i].start);
+        if (target < cEnd) { clipIdx = i; break; }
+    }
+    const localOffset = Math.max(0, target - cum[clipIdx]);
+    const clip = clips[clipIdx];
+    const player = document.getElementById('allPreviewPlayer');
+    const audio = document.getElementById('allPreviewAudio');
+    const useVideo = __isVideoPreviewActive();
+    const media = useVideo ? player : audio;
+    if (!media) return;
+
+    // if switching clip, restart playback from that clip
+    if (clipIdx !== __allModalPlaybackIndex) {
+        const token = __allModalPlaybackToken;
+        __allModalPlaybackIndex = clipIdx;
+        media.removeAttribute('src');
+        media.load();
+        __playAllModalClip(clipIdx, token, localOffset);
+    } else {
+        media.currentTime = clip.start + localOffset;
+        __syncAllModalProgress();
+    }
+}
+
+function __formatModalMediaTime(t) {
+    const s = Math.max(0, Math.floor(Number(t) || 0));
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function __syncAllModalProgress() {
+    const overlay = document.getElementById('allPreviewOverlay');
+    if (!overlay || !overlay.classList.contains('show')) return;
+    const clips = __allModalPlaybackClips;
+    const cum = __allModalCumulative;
+    const total = __allModalTotalDur;
+    const player = document.getElementById('allPreviewPlayer');
+    const audio = document.getElementById('allPreviewAudio');
+    if (!clips || !cum.length || __allModalPlaybackIndex < 0) return;
+    const clip = clips[__allModalPlaybackIndex];
+    if (!clip) return;
+    const useVideo = __isVideoPreviewActive();
+    const media = useVideo ? player : audio;
+    if (!media) return;
+    const ct = Number(media.currentTime) || 0;
+    const globalPos = cum[__allModalPlaybackIndex] + Math.max(0, ct - clip.start);
+    const pct = total > 0 ? Math.min(100, (globalPos / total) * 100) : 0;
+    const bar = document.getElementById('allPreviewProgressBar');
+    const fill = document.getElementById('allPreviewProgressFill');
+    const timeDisp = document.getElementById('allPreviewTimeDisplay');
+    if (bar) bar.value = pct;
+    if (fill) fill.style.width = pct + '%';
+    if (timeDisp) timeDisp.textContent = `${__formatModalMediaTime(globalPos)} / ${__formatModalMediaTime(total)}`;
+}
+
+function __setAllModalPlaying(playing) {
+    const btn = document.getElementById('allPreviewPlayBtn');
+    if (!btn) return;
+    btn.textContent = playing ? '⏸' : '▶';
+    btn.title = playing ? '暂停' : '播放';
+}
+
+function __toggleAllModalPlay() {
+    const clips = __allModalPlaybackClips;
+    if (!clips) return;
+    const player = document.getElementById('allPreviewPlayer');
+    const audio = document.getElementById('allPreviewAudio');
+    const useVideo = __isVideoPreviewActive();
+    const media = useVideo ? player : audio;
+    if (!media) return;
+    if (media.paused) {
+        __allModalUserPaused = false;
+        media.play().catch(() => {});
+        __setAllModalPlaying(true);
+    } else {
+        __allModalUserPaused = true;
+        media.pause();
+        __setAllModalPlaying(false);
+    }
+}
+
+function __openAllPreviewModal() {
+    const clips = __collectAllPreviewClips();
+    if (clips.length === 0) { showToast('没有片段可以播放'); return; }
+
+    const overlay = document.getElementById('allPreviewOverlay');
+    const player = document.getElementById('allPreviewPlayer');
+    const audio = document.getElementById('allPreviewAudio');
+    const loading = document.getElementById('allPreviewLoading');
+    if (!overlay || !player) return;
+
+    // stop any existing playback
+    __allModalPlaybackToken++;
+    if (__allModalRafId) { cancelAnimationFrame(__allModalRafId); __allModalRafId = null; }
+    if (__allModalPlaybackClips) {
+        try { player.pause(); player.removeAttribute('src'); player.load(); } catch (e) { }
+        try { audio.pause(); audio.removeAttribute('src'); audio.load(); } catch (e) { }
+    }
+
+    __allModalPlaybackClips = clips;
+    __allModalPlaybackIndex = -1;
+    __allModalUserPaused = false;
+    const { cum, total } = __buildAllModalCumulative(clips);
+    __allModalCumulative = cum;
+    __allModalTotalDur = total;
+    const token = ++__allModalPlaybackToken;
+
+    const useVideo = __isVideoPreviewActive();
+    player.style.display = useVideo ? 'block' : 'none';
+    audio.style.display = useVideo ? 'none' : 'block';
+    const modalBody = overlay.querySelector('.all-preview-modal-body');
+    if (modalBody) modalBody.classList.toggle('audio-mode', !useVideo);
+
+    overlay.style.display = '';
+    overlay.classList.add('show');
+
+    const progress = document.getElementById('allPreviewProgress');
+    if (progress) progress.textContent = `片段 0/${clips.length}`;
+    if (loading) loading.classList.add('show');
+    __setAllModalPlaying(true);
+
+    // render clip list
+    const listEl = document.getElementById('allPreviewClipList');
+    if (listEl) {
+        const frag = document.createDocumentFragment();
+        let lastVideoName = '';
+        let groupIdx = 0;
+        let currentGroup = null;
+        let currentBody = null;
+        clips.forEach((c, i) => {
+            const name = String(c.name || '').split('/').pop() || '';
+            if (name !== lastVideoName) {
+                lastVideoName = name;
+                groupIdx = 0;
+
+                const group = document.createElement('div');
+                group.className = 'all-preview-clip-group';
+
+                const header = document.createElement('div');
+                header.className = 'all-preview-clip-header';
+                header.innerHTML = '<span class="apch-toggle">▼</span><span class="apch-label">' + __escapeHtml(name) + '</span>';
+                header.addEventListener('click', function () {
+                    const body = this.nextElementSibling;
+                    if (!body) return;
+                    const collapsed = body.classList.toggle('collapsed');
+                    this.querySelector('.apch-toggle').textContent = collapsed ? '▶' : '▼';
+                });
+                group.appendChild(header);
+
+                currentBody = document.createElement('div');
+                currentBody.className = 'all-preview-clip-body';
+                group.appendChild(currentBody);
+
+                frag.appendChild(group);
+                currentGroup = group;
+            }
+            groupIdx++;
+            const item = document.createElement('div');
+            item.className = 'all-preview-clip-item';
+            item.dataset.apIdx = String(i);
+            const dur = Math.max(0, c.end - c.start);
+            item.innerHTML = '<span class="apci-idx">片段' + groupIdx + '</span>'
+                + '<span class="apci-time">' + formatSubtitleTime(c.start) + ' – ' + formatSubtitleTime(c.end) + '</span>';
+            currentBody.appendChild(item);
+        });
+        listEl.replaceChildren(frag);
+    }
+
+    __playAllModalClip(0, token, 0);
+}
+
+let __allModalPlaybackIndex = -1;
+
+async function __playAllModalClip(index, token, seekOffset) {
+    const clips = __allModalPlaybackClips;
+    if (!clips || token !== __allModalPlaybackToken) return;
+
+    if (__allModalRafId) { cancelAnimationFrame(__allModalRafId); __allModalRafId = null; }
+
+    const player = document.getElementById('allPreviewPlayer');
+    const audio = document.getElementById('allPreviewAudio');
+    const loading = document.getElementById('allPreviewLoading');
+    const progress = document.getElementById('allPreviewProgress');
+
+    if (index >= clips.length) {
+        // reached end — stop, don't close
+        if (loading) loading.classList.remove('show');
+        if (progress) progress.textContent = `播放完毕  ${clips.length}/${clips.length}`;
+        __setAllModalPlaying(false);
+        const listEl = document.getElementById('allPreviewClipList');
+        if (listEl) listEl.querySelectorAll('.all-preview-clip-item.active').forEach(el => el.classList.remove('active'));
+        // pause media
+        const useVideo = __isVideoPreviewActive();
+        const m = useVideo ? player : audio;
+        if (m) try { m.pause(); } catch (e) {}
+        return;
+    }
+
+    const clip = clips[index];
+    if (!clip) { __closeAllPreviewModal(); return; }
+
+    __allModalPlaybackIndex = index;
+    if (progress) progress.textContent = `片段 ${index + 1}/${clips.length}`;
+    if (loading) loading.classList.add('show');
+    __setAllModalPlaying(true);
+
+    // highlight active clip in list
+    const listEl = document.getElementById('allPreviewClipList');
+    if (listEl) {
+        listEl.querySelectorAll('.all-preview-clip-item.active').forEach(el => el.classList.remove('active'));
+        const activeEl = listEl.querySelector('.all-preview-clip-item[data-ap-idx="' + index + '"]');
+        if (activeEl) {
+            activeEl.classList.add('active');
+            // expand parent group if collapsed
+            const body = activeEl.closest('.all-preview-clip-body');
+            if (body && body.classList.contains('collapsed')) {
+                body.classList.remove('collapsed');
+                const header = body.previousElementSibling;
+                if (header && header.classList.contains('all-preview-clip-header')) {
+                    const tog = header.querySelector('.apch-toggle');
+                    if (tog) tog.textContent = '▼';
+                }
+            }
+            activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+    }
+
+    const useVideo = __isVideoPreviewActive();
+    const media = useVideo ? player : audio;
+    const url = useVideo
+        ? '/api/video/' + encodeURIComponent(clip.name)
+        : '/api/audio/' + encodeURIComponent(clip.name);
+
+    // check if we need to switch source (skip if same)
+    const currentSrc = String(media.getAttribute('src') || '').trim();
+    if (currentSrc !== url) {
+        media.removeAttribute('src');
+        media.load();
+        media.src = url;
+        media.load();
+        try {
+            await new Promise((resolve, reject) => {
+                const onMeta = () => { media.removeEventListener('loadedmetadata', onMeta); resolve(); };
+                const onErr = () => { media.removeEventListener('error', onErr); reject(); };
+                media.addEventListener('loadedmetadata', onMeta);
+                media.addEventListener('error', onErr);
+                setTimeout(() => { media.removeEventListener('loadedmetadata', onMeta); resolve(); }, 10000);
+            });
+        } catch (e) {
+            if (token !== __allModalPlaybackToken) return;
+            if (loading) loading.classList.remove('show');
+            showToast('加载失败', 'error');
+            __closeAllPreviewModal();
+            return;
+        }
+    }
+
+    if (token !== __allModalPlaybackToken) return;
+    if (loading) loading.classList.remove('show');
+
+    // seek: start + optional offset
+    const seekTarget = clip.start + (seekOffset || 0);
+    try { media.currentTime = seekTarget; } catch (e) { }
+    try { await media.play(); } catch (e) {
+        if (token !== __allModalPlaybackToken) return;
+        showToast('播放失败', 'error');
+        __closeAllPreviewModal();
+        return;
+    }
+
+    __syncAllModalProgress();
+
+    // monitor until end time
+    const token2 = token;
+    const endTime = clip.end;
+    const onEnded = () => { if (token2 === __allModalPlaybackToken) __playAllModalClip(index + 1, token2); };
+    media.addEventListener('ended', onEnded, { once: true });
+
+    // resume from user pause
+    if (__allModalUserPaused) {
+        media.pause();
+        __setAllModalPlaying(false);
+    }
+
+    const checkTime = () => {
+        if (token2 !== __allModalPlaybackToken) { __allModalRafId = null; return; }
+        __syncAllModalProgress();
+        if (!__allModalUserPaused && (media.currentTime || 0) >= endTime - 0.1) {
+            media.removeEventListener('ended', onEnded);
+            __playAllModalClip(index + 1, token2);
+            return;
+        }
+        __allModalRafId = requestAnimationFrame(checkTime);
+    };
+    __allModalRafId = requestAnimationFrame(checkTime);
+}
+
+function __closeAllPreviewModal() {
+    const overlay = document.getElementById('allPreviewOverlay');
+    const player = document.getElementById('allPreviewPlayer');
+    const audio = document.getElementById('allPreviewAudio');
+    if (!overlay) return;
+    __allModalPlaybackToken++;
+    __allModalPlaybackClips = null;
+    __allModalPlaybackIndex = -1;
+    __allModalCumulative = [];
+    __allModalTotalDur = 0;
+    if (__allModalRafId) { cancelAnimationFrame(__allModalRafId); __allModalRafId = null; }
+    try { player.pause(); player.removeAttribute('src'); player.load(); } catch (e) { }
+    try { audio.pause(); audio.removeAttribute('src'); audio.load(); } catch (e) { }
+    overlay.classList.remove('show');
+    setTimeout(() => { overlay.style.display = 'none'; }, 300);
+}
+
+// close handlers
+document.getElementById('allPreviewClose')?.addEventListener('click', __closeAllPreviewModal);
+document.getElementById('allPreviewOverlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'allPreviewOverlay') __closeAllPreviewModal();
+});
+// play/pause
+document.getElementById('allPreviewPlayBtn')?.addEventListener('click', __toggleAllModalPlay);
+// progress bar seeking (global progress)
+const __allPreviewBar = document.getElementById('allPreviewProgressBar');
+if (__allPreviewBar) {
+    __allPreviewBar.addEventListener('input', function () {
+        __seekAllModalToGlobal(Number(this.value));
+    });
+    __allPreviewBar.addEventListener('change', function () {
+        __allModalUserPaused = false;
+        __setAllModalPlaying(true);
+        const player = document.getElementById('allPreviewPlayer');
+        const audio = document.getElementById('allPreviewAudio');
+        const media = __isVideoPreviewActive() ? player : audio;
+        if (media) media.play().catch(() => {});
+    });
+}
+// click on progress wrap (for easier seeking)
+const __allPreviewWrap = document.querySelector('.all-preview-progress-wrap');
+if (__allPreviewWrap) {
+    __allPreviewWrap.addEventListener('click', function (e) {
+        if (e.target.closest('.all-preview-progress-bar')) return;
+        const rect = this.getBoundingClientRect();
+        const pct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+        __seekAllModalToGlobal(pct);
+        __allModalUserPaused = false;
+        __setAllModalPlaying(true);
+        const player = document.getElementById('allPreviewPlayer');
+        const audio = document.getElementById('allPreviewAudio');
+        const media = __isVideoPreviewActive() ? player : audio;
+        if (media) media.play().catch(() => {});
+    });
+}
+
+const batchDeleteBtn = document.getElementById('clipListBatchDeleteBtn');
+if (batchDeleteBtn) {
+    batchDeleteBtn.addEventListener('click', async () => {
+        if (__clipListBatchMode && __clipListSelected.size > 0) {
+            // perform batch delete
+            const count = __clipListSelected.size;
+            const ok = await showConfirmModal(`确定删除选中的 ${count} 个片段吗？`, {
+                title: '批量删除确认',
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!ok) return;
+            // collect indices to delete (sorted descending to avoid index shift)
+            const sorted = [...__clipListSelected].sort((a, b) => b - a);
+            for (const globalIdx of sorted) {
+                let acc = 0;
+                for (let t = 0; t < videoTasks.length; t++) {
+                    const clips = videoTasks[t].clips;
+                    for (let c = 0; c < clips.length; c++) {
+                        if (acc === globalIdx) {
+                            clips.splice(c, 1);
+                            if (clips.length === 0) {
+                                videoTasks.splice(t, 1);
+                            }
+                            break;
+                        }
+                        acc++;
+                    }
+                    if (acc > globalIdx) break;
+                }
+            }
+            __resetClipListBatchMode();
+            renderNewClipList();
+            __saveClipToolState();
+            showToast(`已删除 ${count} 个片段`);
+            return;
+        }
+        __toggleClipListBatchMode();
+    });
+}
+
+document.getElementById('clipListExportBtn')?.addEventListener('click', __exportClips);
+document.getElementById('clipListImportBtn')?.addEventListener('click', __importClips);
 
 const clipListModalOverlay = document.getElementById('clipListModalOverlay');
 const clipListModalClose = document.getElementById('clipListModalClose');
@@ -5169,6 +5827,7 @@ if (openClipListBtn) {
             return;
         }
         if (!clipListModalOverlay) return;
+        __resetClipListBatchMode();
         clipListModalOverlay.style.display = '';
         clipListModalOverlay.classList.add('show');
         renderNewClipList();
@@ -5176,6 +5835,7 @@ if (openClipListBtn) {
 }
 function __closeClipListModal() {
     if (clipListModalOverlay) {
+        __resetClipListBatchMode();
         clipListModalOverlay.classList.remove('show');
         setTimeout(function () { clipListModalOverlay.style.display = 'none'; }, 300);
     }
@@ -6377,6 +7037,15 @@ async function __loadSubtitle() {
             return { start: s.start, end: s.end, text: s.text };
         });
         __subtitleEnabled = true;
+
+        // 从统一进度定位字幕页：找到保存时间对应的字幕，计算页码
+        var saved = __loadProgressSingle();
+        if (saved && saved.name === currentVideoName) {
+            var subIdx = __findSubtitleIndex(saved.t);
+            if (subIdx >= 0) {
+                __subtitlePageIndex = Math.floor(subIdx / __subtitlePageSize);
+            }
+        }
         __syncSubtitleToolbar();
     } catch (e) {
         console.warn('字幕加载失败:', e);
@@ -6430,10 +7099,10 @@ let __subtitleVirtualScrollRaf = null;
 let __subtitleResizeRaf = null;
 let __subtitleAddedFlags = [];
 let __subtitleAddedCacheKey = '';
+let __subtitleLastPageIndex = -1;
 const audioPlayer = document.getElementById('audioPlayer');
 const subtitleSlicePanel = document.getElementById('subtitleSlicePanel');
 const subtitleListContainer = document.getElementById('subtitleListContainer');
-const subtitleToolbarHint = document.getElementById('subtitleToolbarHint');
 const subtitleToolbarPlayBtn = document.getElementById('subtitleToolbarPlayBtn');
 const subtitleToolbarEditBtn = document.getElementById('subtitleToolbarEditBtn');
 const subtitleToolbarAddBtn = document.getElementById('subtitleToolbarAddBtn');
@@ -6444,6 +7113,9 @@ const subtitlePager = document.getElementById('subtitlePager');
 const subtitlePrevPageBtn = document.getElementById('subtitlePrevPageBtn');
 const subtitleNextPageBtn = document.getElementById('subtitleNextPageBtn');
 const subtitlePageInfo = document.getElementById('subtitlePageInfo');
+const subtitlePageJumpInput = document.getElementById('subtitlePageJumpInput');
+const subtitlePageJumpBtn = document.getElementById('subtitlePageJumpBtn');
+const subtitlePageUndoBtn = document.getElementById('subtitlePageUndoBtn');
 
 function __showSubtitleSlicePanel() {
     if (!subtitleSlicePanel || !__subtitleData.length) return;
@@ -6517,8 +7189,10 @@ function __setSubtitlePage(pageIndex) {
         __syncSubtitlePager();
         return;
     }
+    __deselectSubtitle();
     __subtitleListInited = false;
     __renderSubtitleList();
+    __saveSubtitlePageProgress();
 }
 
 function __getSelectedSubtitleIndex() {
@@ -6529,6 +7203,7 @@ function __selectSubtitleIndex(idx, shouldPlay) {
     if (idx < 0 || idx >= __subtitleData.length) return;
     const prev = __subtitleSelectedIndex;
     __subtitleSelectedIndex = idx;
+    __saveSubtitleIndexProgress(idx);
     __refreshSubtitleRowsForIndexes(prev, idx);
     __syncSubtitleToolbar();
     if (shouldPlay) {
@@ -6540,6 +7215,18 @@ function __selectSubtitleIndex(idx, shouldPlay) {
     }
 }
 
+function __deselectSubtitle() {
+    const prev = __subtitleSelectedIndex;
+    if (prev < 0) return;
+    if (__subtitleEditingIndex >= 0) {
+        __cancelSubtitleEdit();
+    }
+    __subtitleSelectedIndex = -1;
+    __subtitleEditingIndex = -1;
+    __refreshSubtitleRowsForIndexes(prev);
+    __syncSubtitleToolbar();
+}
+
 function __syncSubtitleToolbar() {
     const idx = __getSelectedSubtitleIndex();
     const hasSelected = idx >= 0;
@@ -6549,7 +7236,6 @@ function __syncSubtitleToolbar() {
     const isPlaying = hasSelected && idx === __audioPlayingIndex && !isLoading;
     const isVideoActive = __isVideoPreviewActive();
 
-    if (subtitleToolbarHint) subtitleToolbarHint.textContent = '请选择字幕';
     if (subtitleToolbarPlayBtn) {
         subtitleToolbarPlayBtn.disabled = !hasSelected;
         subtitleToolbarPlayBtn.textContent = isLoading ? '加载' : (isPlaying ? '停止' : '播放');
@@ -6662,9 +7348,13 @@ function __createSubtitleItemEl(i) {
     if (isEditing) {
         const orig = __subtitleEditOrigData || sub;
         el.innerHTML = '<span class="sub-time">'
+            + '<button class="sub-time-btn" data-field="start" data-step="-0.1">-0.1</button>'
             + '<input class="sub-time-input" data-field="start" value="' + formatSubtitleTime(orig.start) + '" title="开始时间">'
+            + '<button class="sub-time-btn" data-field="start" data-step="0.1">+0.1</button>'
             + ' → '
+            + '<button class="sub-time-btn" data-field="end" data-step="-0.1">-0.1</button>'
             + '<input class="sub-time-input" data-field="end" value="' + formatSubtitleTime(orig.end) + '" title="结束时间">'
+            + '<button class="sub-time-btn" data-field="end" data-step="0.1">+0.1</button>'
             + '</span>'
             + '<span class="sub-text-edit"><textarea class="sub-textarea">' + __escapeHtml(orig.text) + '</textarea></span>';
     } else {
@@ -6762,9 +7452,46 @@ function __renderSubtitleList() {
     __syncSubtitlePager();
 }
 
+// 点击页面其他区域取消选中字幕，编辑模式下自动放弃更改
+document.addEventListener('click', function (e) {
+    const prev = __subtitleSelectedIndex;
+    if (prev < 0) return;
+    if (e.target.closest('.subtitle-list-item, .subtitle-toolbar, .subtitle-pager, input, textarea, button, #subtitleSlicePanel')) return;
+    if (__subtitleEditingIndex >= 0) {
+        __cancelSubtitleEdit();
+    }
+    __subtitleSelectedIndex = -1;
+    __subtitleEditingIndex = -1;
+    __refreshSubtitleRowsForIndexes(prev);
+    __syncSubtitleToolbar();
+});
+
 // 事件委托（单监听器，避免每项独立 addEventListener）
 if (subtitleListContainer) {
     subtitleListContainer.addEventListener('click', function (e) {
+        {
+            const btn = e.target.closest('.sub-time-btn');
+            if (btn) {
+                const item = btn.closest('.subtitle-list-item');
+                if (!item) return;
+                const field = btn.dataset.field;
+                const step = parseFloat(btn.dataset.step);
+                if (!Number.isFinite(step)) return;
+                const inp = item.querySelector('.sub-time-input[data-field="' + field + '"]');
+                if (!inp) return;
+                const otherField = field === 'start' ? 'end' : 'start';
+                const otherInp = item.querySelector('.sub-time-input[data-field="' + otherField + '"]');
+                const val = parseTimeSub(inp.value);
+                const otherVal = otherInp ? parseTimeSub(otherInp.value) : NaN;
+                if (!Number.isFinite(val)) return;
+                let newVal = Math.round((val + step) * 100) / 100;
+                if (newVal < 0) newVal = 0;
+                if (field === 'start' && Number.isFinite(otherVal) && newVal >= otherVal) return;
+                if (field === 'end' && Number.isFinite(otherVal) && newVal <= otherVal) return;
+                inp.value = formatSubtitleTime(newVal);
+                return;
+            }
+        }
         const item = e.target.closest('.subtitle-list-item');
         if (!item) return;
         const idx = parseInt(item.dataset.subtitleIndex, 10);
@@ -6773,7 +7500,11 @@ if (subtitleListContainer) {
         if (e.target.closest('input, textarea')) {
             return;
         }
-        __selectSubtitleIndex(idx, true);
+        if (__subtitleEditingIndex >= 0 && __subtitleEditingIndex !== idx) {
+            __cancelSubtitleEdit();
+        }
+        const isAlreadySelected = __subtitleSelectedIndex === idx;
+        __selectSubtitleIndex(idx, isAlreadySelected);
     });
 }
 
@@ -6787,6 +7518,45 @@ if (subtitleNextPageBtn) {
     subtitleNextPageBtn.addEventListener('click', function () {
         __setSubtitlePage(__subtitlePageIndex + 1);
     });
+}
+
+function __jumpToSubtitlePage(page) {
+    const val = String(page).trim();
+    if (!val) return;
+    const p = parseInt(val, 10);
+    if (!Number.isFinite(p) || p < 1) return;
+    const pageCount = __getSubtitlePageCount();
+    const target = Math.min(p, pageCount) - 1;
+    if (target === __subtitlePageIndex) return;
+    __subtitleLastPageIndex = __subtitlePageIndex;
+    if (subtitlePageUndoBtn) subtitlePageUndoBtn.style.display = '';
+    __setSubtitlePage(target);
+}
+
+function __undoSubtitlePageJump() {
+    if (__subtitleLastPageIndex < 0) return;
+    const prev = __subtitleLastPageIndex;
+    __subtitleLastPageIndex = -1;
+    if (subtitlePageUndoBtn) subtitlePageUndoBtn.style.display = 'none';
+    __setSubtitlePage(prev);
+}
+
+if (subtitlePageJumpInput) {
+    subtitlePageJumpInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            __jumpToSubtitlePage(subtitlePageJumpInput.value);
+            subtitlePageJumpInput.value = '';
+        }
+    });
+}
+if (subtitlePageJumpBtn) {
+    subtitlePageJumpBtn.addEventListener('click', function () {
+        __jumpToSubtitlePage(subtitlePageJumpInput.value);
+        subtitlePageJumpInput.value = '';
+    });
+}
+if (subtitlePageUndoBtn) {
+    subtitlePageUndoBtn.addEventListener('click', __undoSubtitlePageJump);
 }
 
 window.addEventListener('resize', function () {
@@ -7218,9 +7988,10 @@ async function __playAllVideoClipAt(index, token) {
     __allPreviewLoading = true;
     __syncAllPreviewButton();
     showToast('正在加载预览片段…', 'info', 1200);
-    const buffered = await __waitMediaRangeBuffered(player, startTime, endTime, function () {
+    const bufEnd = Math.min(startTime + 1, endTime);
+    const buffered = await __waitMediaRangeBuffered(player, startTime, bufEnd, function () {
         return token === __allPlaybackToken && !!__allPlaybackClips;
-    });
+    }, 15000);
     if (token === __allPlaybackToken) {
         __allPreviewLoading = false;
         __syncAllPreviewButton();
@@ -7347,6 +8118,7 @@ async function __playSubtitleVideoSegment(idx) {
 }
 
 async function __playSubtitleSegment(idx, start, end) {
+    if (idx >= 0) __saveSubtitleIndexProgress(idx);
 
     if (__isVideoPreviewActive()) {
         if (__framePlayerActive && __framePlayer && __framePlayer.ready) {
@@ -7416,15 +8188,17 @@ async function __playSubtitleSegment(idx, start, end) {
             stopVideoSegment();
             showToast('视频片段播放卡顿，播放失败，请重试', 'error');
         };
-        showToast('正在加载字幕片段…', 'info', 1200);
-        const buffered = await __waitMediaRangeBuffered(player, start, end, function () {
+        const bufferEnd = Math.min(start + 1, segEnd);
+        const buffered = await __waitMediaRangeBuffered(player, start, bufferEnd, function () {
             return segToken === __audioPlaybackToken && __audioPlayingIndex === segIdx;
-        });
+        }, 15000);
         if (!buffered || segToken !== __audioPlaybackToken || __audioPlayingIndex !== segIdx) {
             if (segToken === __audioPlaybackToken) showToast('字幕片段加载失败，请稍后重试', 'error');
-            player.pause();
-            __audioPlayingIndex = -1;
-            __audioSegmentEnd = 0;
+            if (segToken === __audioPlaybackToken || __audioPlayingIndex === segIdx) {
+                player.pause();
+                __audioPlayingIndex = -1;
+                __audioSegmentEnd = 0;
+            }
             __refreshSubtitleRowsForIndexes(segIdx);
             return;
         }
@@ -7471,6 +8245,13 @@ async function __playSubtitleSegment(idx, start, end) {
     __audioSegmentEnd = end;
     const token = ++__audioPlaybackToken;
 
+    const loadingTimeout = setTimeout(function () {
+        if (token === __audioPlaybackToken && __audioPlayingIndex === idx && __audioLoadingIndex === idx) {
+            __stopAudioPlayback();
+            showToast('字幕片段加载超时，请重试', 'error');
+        }
+    }, 10000);
+
     // 同一文件不重新加载，避免慢网络下反复重下
     const curSrc = audioPlayer.getAttribute('src') || '';
     if (curSrc !== __audioSrc) audioPlayer.src = __audioSrc;
@@ -7478,18 +8259,22 @@ async function __playSubtitleSegment(idx, start, end) {
     const startPlayback = async () => {
         if (token !== __audioPlaybackToken) return;
         try { audioPlayer.currentTime = start; } catch (e) { }
-        showToast('正在加载字幕片段…', 'info', 1200);
-        const buffered = await __waitMediaRangeBuffered(audioPlayer, start, end, function () {
+        const audioBufferEnd = Math.min(start + 1, end);
+        const buffered = await __waitMediaRangeBuffered(audioPlayer, start, audioBufferEnd, function () {
             return token === __audioPlaybackToken && __audioPlayingIndex === idx;
-        });
+        }, 15000);
         if (!buffered || token !== __audioPlaybackToken || __audioPlayingIndex !== idx) {
+            clearTimeout(loadingTimeout);
             if (token === __audioPlaybackToken) showToast('字幕片段加载失败，请稍后重试', 'error');
-            __stopAudioPlayback();
+            if (token === __audioPlaybackToken || __audioPlayingIndex === idx) {
+                __stopAudioPlayback();
+            }
             return;
         }
 
         const onPlaying = () => {
             if (token !== __audioPlaybackToken) return;
+            clearTimeout(loadingTimeout);
             audioPlayer.removeEventListener('playing', onPlaying);
             __audioPendingPlaying = null;
             __subtitleAudioPlaybackStarted = true;
@@ -7533,13 +8318,17 @@ async function __playSubtitleSegment(idx, start, end) {
     };
 
     if (audioPlayer.readyState >= 1 && Number.isFinite(audioPlayer.duration)) {
-        startPlayback();
+        startPlayback().catch(function () {
+            if (token === __audioPlaybackToken) __stopAudioPlayback();
+        });
     } else {
         const onLoaded = () => {
             audioPlayer.removeEventListener('loadedmetadata', onLoaded);
             __audioPendingLoadedmeta = null;
             if (token !== __audioPlaybackToken) return;
-            startPlayback();
+            startPlayback().catch(function () {
+                if (token === __audioPlaybackToken) __stopAudioPlayback();
+            });
         };
         if (__audioPendingLoadedmeta) {
             audioPlayer.removeEventListener('loadedmetadata', __audioPendingLoadedmeta);
@@ -7865,6 +8654,10 @@ async function __saveSubtitleEdit(idx) {
     if (idx < 0 || idx >= __subtitleData.length) return;
     if (__subtitleEditingIndex !== idx) return;
 
+    const oldSub = __subtitleData[idx];
+    const oldRoundedStart = roundToSubtitleTime(oldSub.start);
+    const oldRoundedEnd = roundToSubtitleTime(oldSub.end);
+
     const username = await __getSubtitleEditUsername('保存字幕');
     if (!username) return;
 
@@ -7902,13 +8695,16 @@ async function __saveSubtitleEdit(idx) {
         return;
     }
 
+    const newRoundedStart = roundToSubtitleTime(newStart);
+    const newRoundedEnd = roundToSubtitleTime(newEnd);
+
     try {
         const resp = await fetch('/api/subtitle/' + encodeURIComponent(currentVideoName), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: username,
-                edits: [{ index: idx, start: roundToSubtitleTime(newStart), end: roundToSubtitleTime(newEnd), text: newText }],
+                edits: [{ index: idx, start: newRoundedStart, end: newRoundedEnd, text: newText }],
             }),
         });
         if (!resp.ok) {
@@ -7926,11 +8722,54 @@ async function __saveSubtitleEdit(idx) {
         __subtitleEditingIndex = -1;
         __subtitleEditOrigData = null;
         __subtitleAddedCacheKey = '';
-        if (!__rerenderSubtitleRow(idx)) {
-            __renderSubtitleList();
+
+        // Sync timeline clips that have the same original subtitle time range
+        if (currentVideoName) {
+            const matchedClips = [];
+            for (const t of (videoTasks || [])) {
+                if (String(t?.name || '') !== currentVideoName) continue;
+                for (let ci = 0; ci < (t.clips || []).length; ci++) {
+                    const c = t.clips[ci];
+                    const cs = Number(c.start), ce = Number(c.end);
+                    const cSubS = Number(c._subStart), cSubE = Number(c._subEnd);
+                    if (Number.isFinite(cSubS) && Number.isFinite(cSubE)) {
+                        if (cSubS === oldSub.start && cSubE === oldSub.end) {
+                            matchedClips.push({ task: t, clip: c, ci });
+                        }
+                    } else if (cs === oldRoundedStart && ce === oldRoundedEnd) {
+                        matchedClips.push({ task: t, clip: c, ci });
+                    }
+                }
+            }
+            if (matchedClips.length > 0) {
+                for (const m of matchedClips) {
+                    m.clip.start = newRoundedStart;
+                    m.clip.end = newRoundedEnd;
+                    m.clip._subStart = newRoundedStart;
+                    m.clip._subEnd = newRoundedEnd;
+                }
+                if (typeof window.__tlSuppressAutoFollow === 'function') window.__tlSuppressAutoFollow(300);
+                if (typeof window.__tlSuppressObserverFlush === 'function') window.__tlSuppressObserverFlush();
+                renderNewClipList();
+                if (typeof window.__tlRenderTimeline === 'function') window.__tlRenderTimeline();
+                __saveClipToolState();
+            }
+            if (!__rerenderSubtitleRow(idx)) {
+                __renderSubtitleList();
+            }
+            __syncSubtitleToolbar();
+            if (matchedClips.length > 0) {
+                showToast('字幕已保存，已同步 ' + matchedClips.length + ' 个片段', 'success');
+            } else {
+                showToast('字幕已保存', 'success');
+            }
+        } else {
+            if (!__rerenderSubtitleRow(idx)) {
+                __renderSubtitleList();
+            }
+            __syncSubtitleToolbar();
+            showToast('字幕已保存', 'success');
         }
-        __syncSubtitleToolbar();
-        showToast('字幕已保存', 'success');
     } catch (e) {
         showToast('保存失败: ' + (e.message || e), 'error');
     }
@@ -8317,30 +9156,28 @@ document.addEventListener('keydown', (e) => {
             __doAddClip();
         } else {
             updateClipInputs();
-            showToast(`起点: ${formatTime(r.time)} 帧#${r.frame} (t=${r.t?.toFixed(2)} fps=${r.fps})`);
+            showToast(`起点: ${formatTime(r.time)}`);
             if (quickSetStartBtn) triggerBtnFeedback(quickSetStartBtn);
         }
     }
     // [W] 设定终点，若起点已设定则自动添加片段
     else if (key === 'w') {
+        if (tempStart === null) {
+            showToast('请先设置起点', 'info');
+            return;
+        }
         if (typeof window.__tlDeselectAllClips === 'function') __tlDeselectAllClips();
         const r = __getCurrentPlayTime(); const attempted = r.time; tempEndFrame = r.frame;
 
         // 若已设起点且终点早于起点，则提示并不更新
-        if (tempStart !== null && attempted < tempStart) {
+        if (attempted < tempStart) {
             showToast('终点不能早于起点，请先调整起点或重置终点', 'warning');
             return;
         }
 
         tempEnd = attempted;
-        if (tempStart !== null) {
-            // 起点已设，自动提交（UI 更新由 __doAddClip 内部 rAF 统一处理）
-            __doAddClip();
-        } else {
-            updateClipInputs();
-            showToast(`终点: ${formatTime(r.time)} 帧#${r.frame} (t=${r.t?.toFixed(2)} fps=${r.fps})`);
-            if (quickSetEndBtn) triggerBtnFeedback(quickSetEndBtn);
-        }
+        // 起点已设，自动提交（UI 更新由 __doAddClip 内部 rAF 统一处理）
+        __doAddClip();
     }
     // [C] 手动添加片段（作为备选快捷键）
     else if (key === 'c' || key === 'enter') {
@@ -8438,17 +9275,26 @@ document.addEventListener('keydown', (e) => {
     let __tlRenderedClips = [];
     let __tlResizeObserver = null;
     let __tlMediaResetKey = '';
+    function _tlThumbDisplayWidth(container) {
+        const h = Math.max(1, (container && container.clientHeight) || 48);
+        return Math.max(1, Math.round(h * 16 / 9));
+    }
+
     function _tlCalcThumbStep() {
         const dur = _tlDur();
         if (!dur) return 30;
-        const target = 25;
-        let step = Math.max(5, Math.round(dur / target));
-        step = Math.min(step, 120);
+        const inner = _tlInner();
+        const pxWidth = Math.max(0, inner ? inner.clientWidth : 0);
+        const thumbW = _tlThumbDisplayWidth(__tlThumbLastStrip);
+        const target = pxWidth > 0 ? Math.max(1, Math.ceil(pxWidth / thumbW) + 1) : 60;
+        let step = Math.max(1, Math.floor(dur / target));
+        step = Math.min(step, 600);
         return step;
     }
     let __tlThumbLastStrip = null;
     let __tlThumbLastDur = 0;
     let __tlThumbLastData = [];
+    let __tlThumbLastStep = 0;
     let __tlThumbAbortController = null;
     const __tlThumbCache = new Map();
     const __tlThumbJobs = new Map();
@@ -8577,13 +9423,13 @@ document.addEventListener('keydown', (e) => {
         const dur = _tlDur();
         if (!dur || !currentVideoName || !__isVideoReady()) return [];
 
-        const step = Math.max(5, Math.floor(Number(stepSec) || _tlCalcThumbStep()));
+        const step = Math.max(1, Math.floor(Number(stepSec) || _tlCalcThumbStep()));
         const params = new URLSearchParams({
             name: currentVideoName,
             step: String(step),
-            width: '128',
-            height: '72',
-            quality: '8'
+            width: '640',
+            height: '360',
+            quality: '10'
         });
 
         const streamRes = await fetch(`/api/thumb_manifest_stream?${params.toString()}`, { signal });
@@ -8692,17 +9538,16 @@ document.addEventListener('keydown', (e) => {
         container.innerHTML = '';
         if (!dur || !Array.isArray(thumbs) || thumbs.length === 0) return;
 
-        const step = Math.max(0.1, Number(stepSec) || _tlCalcThumbStep());
+        const thumbW = _tlThumbDisplayWidth(container);
         for (const thumb of thumbs) {
             if (!thumb || typeof thumb.time !== 'number' || !thumb.url) continue;
             const t = Math.max(0, Number(thumb.time) || 0);
             if (t > dur) continue;
             const leftPct = (t / dur) * 100;
-            const widthPct = Math.max(0.01, (step / dur) * 100);
             const seg = document.createElement('div');
             seg.className = 'timeline-thumb';
             seg.style.left = leftPct + '%';
-            seg.style.width = widthPct + '%';
+            seg.style.width = thumbW + 'px';
             seg.style.backgroundImage = `url(${thumb.url})`;
             container.appendChild(seg);
         }
@@ -8712,7 +9557,33 @@ document.addEventListener('keydown', (e) => {
         if (!__tlThumbEnabled) return;
         if (!__tlThumbLastStrip || !__tlThumbLastStrip.isConnected) return;
         if (!__tlThumbLastDur || !Array.isArray(__tlThumbLastData) || __tlThumbLastData.length === 0) return;
-        _tlRenderThumbStrip(__tlThumbLastStrip, __tlThumbLastDur, __tlThumbLastData, _tlCalcThumbStep());
+        const nextStep = _tlCalcThumbStep();
+        if (nextStep === __tlThumbLastStep) {
+            _tlRenderThumbStrip(__tlThumbLastStrip, __tlThumbLastDur, __tlThumbLastData, nextStep);
+            return;
+        }
+
+        __tlThumbLastStep = 0;
+        __tlThumbLastData = [];
+        _tlRenderThumbStrip(__tlThumbLastStrip, __tlThumbLastDur, [], nextStep);
+
+        const myToken = ++__tlThumbRenderToken;
+        const ctrl = _tlBeginThumbLoading();
+        _tlEnsureThumbs(nextStep, (partialThumbs) => {
+            if (myToken !== __tlThumbRenderToken) return;
+            if (!__tlThumbLastStrip || !__tlThumbLastStrip.isConnected) return;
+            if (!__tlThumbEnabled) return;
+            __tlThumbLastStep = nextStep;
+            __tlThumbLastData = partialThumbs;
+            _tlRenderThumbStrip(__tlThumbLastStrip, __tlThumbLastDur, partialThumbs, nextStep);
+        }, ctrl.signal).then(thumbs => {
+            if (myToken !== __tlThumbRenderToken) return;
+            if (!__tlThumbLastStrip || !__tlThumbLastStrip.isConnected) return;
+            if (!__tlThumbEnabled) return;
+            __tlThumbLastStep = nextStep;
+            __tlThumbLastData = thumbs;
+            _tlRenderThumbStrip(__tlThumbLastStrip, __tlThumbLastDur, thumbs, nextStep);
+        }).catch(() => { });
     }
 
     // ---- 波形可视化 ----
@@ -9363,7 +10234,7 @@ document.addEventListener('keydown', (e) => {
 
         tempStart = attempted;
             updateClipInputs();
-            showToast(`起点: ${formatTime(r.time)} 帧#${r.frame} (t=${r.t?.toFixed(2)} fps=${r.fps})`);
+            showToast(`起点: ${formatTime(r.time)}`);
 
             // 如果已设终点，则自动尝试添加片段
             if (tempEnd !== null) {
@@ -9387,20 +10258,22 @@ document.addEventListener('keydown', (e) => {
         quickSetEndBtn.appendChild(ctrlEndDisp);
         quickSetEndBtn.addEventListener('click', () => {
             if (!currentVideoName || !__isVideoReady()) return;
+            if (tempStart === null) {
+                showToast('请先设置起点', 'info');
+                return;
+            }
             const r = __getCurrentPlayTime(); const attempted = r.time; tempEndFrame = r.frame;
 
             // 若已设起点且终点早于起点，则提示并不更新
-            if (tempStart !== null && attempted < tempStart) {
+            if (attempted < tempStart) {
                 showToast('终点不能早于起点，请先调整起点或重置终点', 'warning');
                 return;
             }
 
-        tempEnd = attempted;
+            tempEnd = attempted;
             updateClipInputs();
-            showToast(`终点: ${formatTime(r.time)} 帧#${r.frame} (t=${r.t?.toFixed(2)} fps=${r.fps})`);
-            if (tempStart !== null) {
-                __doAddClip();
-            }
+            showToast(`终点: ${formatTime(r.time)}`);
+            __doAddClip();
         });
         clipGroup.appendChild(quickSetEndBtn);
 
@@ -9650,6 +10523,7 @@ document.addEventListener('keydown', (e) => {
         __tlThumbLastStrip = thumbsStrip;
         __tlThumbLastDur = dur;
         __tlThumbLastData = [];
+        __tlThumbLastStep = 0;
         track.appendChild(thumbsStrip);
         _tlRenderThumbStrip(thumbsStrip, dur, [], _tlCalcThumbStep());
 
@@ -9691,26 +10565,30 @@ document.addEventListener('keydown', (e) => {
                 _tlAbortThumbLoading();
                 __tlThumbRenderToken += 1;
                 __tlThumbLastData = [];
+                __tlThumbLastStep = 0;
                 _tlRenderThumbStrip(thumbsStrip, dur, [], _tlCalcThumbStep());
                 return;
             }
             if (!(currentVideoName && dur > 0 && __isVideoReady())) return;
             const myToken = ++__tlThumbRenderToken;
             const ctrl = _tlBeginThumbLoading();
-            _tlEnsureThumbs(_tlCalcThumbStep(), (partialThumbs) => {
+            const thumbStep = _tlCalcThumbStep();
+            _tlEnsureThumbs(thumbStep, (partialThumbs) => {
                 if (myToken !== __tlThumbRenderToken) return;
                 if (!thumbsStrip.isConnected) return;
                 if (!__tlThumbEnabled) return;
                 __tlThumbLastDur = dur;
                 __tlThumbLastData = partialThumbs;
-                _tlRenderThumbStrip(thumbsStrip, dur, partialThumbs, _tlCalcThumbStep());
+                __tlThumbLastStep = thumbStep;
+                _tlRenderThumbStrip(thumbsStrip, dur, partialThumbs, thumbStep);
             }, ctrl.signal).then(thumbs => {
                 if (myToken !== __tlThumbRenderToken) return;
                 if (!thumbsStrip.isConnected) return;
                 if (!__tlThumbEnabled) return;
                 __tlThumbLastDur = dur;
                 __tlThumbLastData = thumbs;
-                _tlRenderThumbStrip(thumbsStrip, dur, thumbs, _tlCalcThumbStep());
+                __tlThumbLastStep = thumbStep;
+                _tlRenderThumbStrip(thumbsStrip, dur, thumbs, thumbStep);
             }).catch(() => { });
         };
         _syncFollowThumbWaveformState();
@@ -9842,20 +10720,23 @@ document.addEventListener('keydown', (e) => {
         if (__tlThumbEnabled && currentVideoName && dur > 0 && __isVideoReady()) {
             const myToken = ++__tlThumbRenderToken;
             const ctrl = _tlBeginThumbLoading();
-            _tlEnsureThumbs(_tlCalcThumbStep(), (partialThumbs) => {
+            const thumbStep = _tlCalcThumbStep();
+            _tlEnsureThumbs(thumbStep, (partialThumbs) => {
                 if (myToken !== __tlThumbRenderToken) return;
                 if (!thumbsStrip.isConnected) return;
                 if (!__tlThumbEnabled) return;
                 __tlThumbLastDur = dur;
                 __tlThumbLastData = partialThumbs;
-                _tlRenderThumbStrip(thumbsStrip, dur, partialThumbs, _tlCalcThumbStep());
+                __tlThumbLastStep = thumbStep;
+                _tlRenderThumbStrip(thumbsStrip, dur, partialThumbs, thumbStep);
             }, ctrl.signal).then(thumbs => {
                 if (myToken !== __tlThumbRenderToken) return;
                 if (!thumbsStrip.isConnected) return;
                 if (!__tlThumbEnabled) return;
                 __tlThumbLastDur = dur;
                 __tlThumbLastData = thumbs;
-                _tlRenderThumbStrip(thumbsStrip, dur, thumbs, _tlCalcThumbStep());
+                __tlThumbLastStep = thumbStep;
+                _tlRenderThumbStrip(thumbsStrip, dur, thumbs, thumbStep);
             }).catch(() => { });
         }
 
