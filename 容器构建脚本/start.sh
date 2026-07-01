@@ -364,7 +364,9 @@ export LOG_MAX_FILES=100
 source "/rec/脚本/log.sh"
 
 # 用于记录上一次检查时的整体状态（0: 均静止, 1: 有目录在录制）
-LAST_STATUS=0 
+LAST_STATUS=0
+# 跟踪已报告不存在的目录，避免重复警告
+declare -A MISSING_DIR_REPORTED 
 
 log info "目录监控脚本已启动..."
 
@@ -388,9 +390,12 @@ while true; do
   ANY_RECORDING=false # 局部变量：标记本次循环中是否有任意一个目录在录制
   SAVED_RECENT_FILES="" # 新增：用于记录究竟是哪些文件在写入
   for folder in "${source_folders[@]}"; do
-    # 如果文件夹不存在，跳过检查并在日志中警告
+    # 如果文件夹不存在，跳过检查（仅首次警告）
     if [[ ! -d "$folder" ]]; then
-      log warn "监控目录 $folder 不存在，跳过该目录检查。"
+      if [[ -z "${MISSING_DIR_REPORTED[$folder]}" ]]; then
+        log warn "监控目录 $folder 不存在，跳过该目录检查（后续不再重复警告）。"
+        MISSING_DIR_REPORTED[$folder]=1
+      fi
       continue
     fi
 
