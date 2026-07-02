@@ -294,26 +294,29 @@ cat << 'EOF' > "$SCHEDULER_SCRIPT"
 #!/bin/bash
 
 CONFIG_FILE="/rec/config.conf"
-DEFAULT_SLEEP_TIME="300"  # 每五分钟检查一次状态
+DEFAULT_SLEEP_TIME="300"
 LOG_FILE="/rec/备份脚本执行日志.log"
 
-# 引入日志函数库
 source "/rec/脚本/log.sh"
 LOG_BASE_DIR="/rec/logs"
 LOG_APP_NAME="备份执行脚本"
 LOG_MAX_FILES=100
 
-# 用于记录上一次检查时的整体状态（0: 均静止, 1: 有目录在录制）
 LAST_STATUS=0
-# 跟踪已报告不存在的目录，避免重复警告
-declare -A MISSING_DIR_REPORTED 
+declare -A MISSING_DIR_REPORTED
+TRANSITION_COUNT=0
+ITERATION_COUNT=0
 
-log info "目录监控脚本已启动..."
+log info "═══════════════════════════════════════════════"
+log info "  目录监控脚本已启动"
+log info "  检查间隔: ${DEFAULT_SLEEP_TIME}s"
+log info "文件写入静默阈值: 20 分钟"
+log info "═══════════════════════════════════════════════"
 
 while true; do
-  # 0. 重置日志记录
+  ((ITERATION_COUNT++))
   log_reset_session
-  # 1. 读取配置文件
+
   if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
   else
@@ -321,58 +324,58 @@ while true; do
     ENABLE_UPLOAD_SCRIPT=false
   fi
 
-  # 如果未启用，则跳过后续检查
   if [[ "$ENABLE_UPLOAD_SCRIPT" != "true" ]]; then
-    log info "配置文件中未启用上传备份脚本，跳过检查。"
+    log info "上传备份未启用(ENABLE_UPLOAD_SCRIPT=$ENABLE_UPLOAD_SCRIPT)，跳过检查"
     sleep "$DEFAULT_SLEEP_TIME"
     continue
   fi
 
-  # 2. 遍历所有配置的源文件夹，检查写入状态
-  ANY_RECORDING=false # 局部变量：标记本次循环中是否有任意一个目录在录制
-  SAVED_RECENT_FILES="" # 新增：用于记录究竟是哪些文件在写入
+  ANY_RECORDING=false
+  SAVED_RECENT_FILES=""
+  NEWEST_TS=0
   for folder in "${source_folders[@]}"; do
-    # 如果文件夹不存在，跳过检查（仅首次警告）
     if [[ ! -d "$folder" ]]; then
       if [[ -z "${MISSING_DIR_REPORTED[$folder]}" ]]; then
-        log warn "监控目录 $folder 不存在，跳过该目录检查（后续不再重复警告）。"
+        log warn "监控目录 $folder 不存在，跳过检查（仅首次警告）"
         MISSING_DIR_REPORTED[$folder]=1
       fi
       continue
     fi
 
-    # 核心逻辑：使用 find 检查该目录下 20 分钟内是否有文件被修改/写入
     RECENT_FILES=$(find "$folder" -type f -mmin -20 2>/dev/null)
-    
     if [[ -n "$RECENT_FILES" ]]; then
       ANY_RECORDING=true
       SAVED_RECENT_FILES="${SAVED_RECENT_FILES}${RECENT_FILES}"$'\n'
+      FOLDER_NEWEST=$(find "$folder" -type f -mmin -20 -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+      NEWEST_TS=$(awk -v a="$NEWEST_TS" -v b="$FOLDER_NEWEST" 'BEGIN { print (a > b) ? a : b }')
     fi
   done
 
-  # 3. 状态机逻辑判断
+  COOLDOWN=1200
   if [[ "$ANY_RECORDING" = true ]]; then
-    # 情况 A：至少有一个目录正在写入
     if [[ $LAST_STATUS -eq 0 ]]; then
-      log info "检测到写入，重置状态..."
+      ((TRANSITION_COUNT++))
+      file_count=$(echo "$SAVED_RECENT_FILES" | sed '/^\s*$/d' | wc -l)
+      log info "检测到录制中（过渡 #${TRANSITION_COUNT}），${file_count} 个文件活跃"
       echo "$SAVED_RECENT_FILES" | sed '/^\s*$/d' | while read -r file; do
-        log info "触发写入的文件: $file"
+        log info "  写入文件: $file"
       done
+    elif [[ $LAST_STATUS -eq 1 ]] && [[ $NEWEST_TS -gt 0 ]]; then
+      REMAIN=$(( (COOLDOWN - ($(date +%s) - ${NEWEST_TS%.*})) / 60 ))
+      if [[ $REMAIN -gt 0 ]]; then
+        log info "录制已停止，等待静默确认... 剩余 ${REMAIN} 分钟后执行备份"
+      fi
     fi
-    LAST_STATUS=1 # 标记整体为录制中状态
+    LAST_STATUS=1
   else
-    # 情况 B：所有目录在过去 20 分钟内都没有任何文件写入
     if [[ $LAST_STATUS -eq 1 ]]; then
-      # 关键节点：所有录制都结束，且距离最后一次写入已满 20 分钟
-      log info "所有设置目录停止写入已满 20 分钟，判断录制全部结束，开始执行备份..."
-      # 执行核心备份脚本
+      ((TRANSITION_COUNT++))
+      log info "录制结束（过渡 #${TRANSITION_COUNT}），20 分钟无写入，开始执行备份脚本..."
+      BACKUP_START_TS=$(date +%s)
       /rec/脚本/录播上传备份脚本.sh >> "$LOG_FILE" 2>&1
-      log info "备份脚本执行完毕。"
-      
-      LAST_STATUS=0 # 重置状态，等待下一次录制
-    else
-      # 持续静止状态（没有录制，或者早就录完上传过了），不做任何操作
-      :
+      BACKUP_ELAPSED=$(( $(date +%s) - BACKUP_START_TS ))
+      log info "备份脚本执行完毕（耗时:${BACKUP_ELAPSED}s）"
+      LAST_STATUS=0
     fi
   fi
   sleep "$DEFAULT_SLEEP_TIME"
