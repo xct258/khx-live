@@ -2123,8 +2123,8 @@ async def get_dir_durations(path: str = ""):
 # ------------------ 批量合并 ------------------
 @app.post("/api/slice_merge_all")
 async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTasks = None):
-    # 总时长上限（单位：秒） - precise: 30 分钟
-    MAX_TOTAL_SECONDS = 30 * 60
+    # 总时长上限（单位：秒） - precise: 90 分钟
+    MAX_TOTAL_SECONDS = 90 * 60
 
     # 空片段校验：避免前端误提交导致 ffmpeg 报错
     total_clips = sum(len(v.clips) for v in (body.videos or []))
@@ -2139,7 +2139,7 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
                 raise HTTPException(400, f"片段结束时间必须大于开始时间: {vid.name}")
             total_seconds += float(clip.end - clip.start)
 
-    # 总时长限制：30 分钟
+    # 总时长限制：90 分钟
     if total_seconds > MAX_TOTAL_SECONDS:
         max_minutes = MAX_TOTAL_SECONDS // 60
         raise HTTPException(400, f"最终合并总时长不能超过{max_minutes}分钟（当前约 {int(total_seconds)} 秒）")
@@ -2273,6 +2273,7 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             except StopIteration:
                 insert_at = len(cmd_with_progress)
             cmd_with_progress[insert_at:insert_at] = [
+                "-hide_banner",
                 "-loglevel", "info",
                 "-stats_period", "0.1",
                 "-progress", "pipe:1",
@@ -2393,22 +2394,34 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             raise RuntimeError("ffmpeg 失败：" + tail_txt)
 
 
-    def _run_ffmpeg_concat_with_cancel(cmd: list):
+    def _run_ffmpeg_concat_with_cancel(cmd: list, total_seconds: float = 0.0):
         if _merge_cancel_event.is_set():
             raise MergeCancelled("用户取消合并")
 
+        # Add progress reporting
+        cmd_with_progress = list(cmd)
+        if "-progress" not in cmd_with_progress:
+            cmd_with_progress = cmd_with_progress[:1] + [
+                "-progress", "pipe:1",
+                "-stats_period", "0.5",
+            ] + cmd_with_progress[1:]
+
         proc = subprocess.Popen(
-            cmd,
+            cmd_with_progress,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
             universal_newlines=True,
         )
         _set_merge_runtime(proc=proc)
 
+        tail = deque(maxlen=200)
+        out_time_sec = 0.0
+        last_update = 0.0
+
         try:
-            while True:
+            for raw_line in proc.stdout:
                 if _merge_cancel_event.is_set():
                     try:
                         if proc.poll() is None:
@@ -2421,20 +2434,53 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
                         pass
                     raise MergeCancelled("用户取消合并")
 
-                rc = proc.poll()
-                if rc is not None:
-                    out, err = proc.communicate(timeout=0.2)
-                    
-                    if _merge_cancel_event.is_set():
-                        raise MergeCancelled("用户取消合并")
+                line = (raw_line or "").rstrip()
+                stripped = line.strip()
+                if stripped:
+                    tail.append(stripped)
 
-                    if rc != 0:
-                        tail = (err or out or "").strip()
-                        if len(tail) > 4000:
-                            tail = tail[-4000:]
-                        raise RuntimeError("ffmpeg 合并失败：" + ("\n" + tail if tail else ""))
-                    return
-                time.sleep(0.2)
+                # Parse progress lines
+                if "=" in stripped:
+                    k, v = stripped.split("=", 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if k == "out_time_ms":
+                        try:
+                            out_time_sec = max(0.0, int(v) / 1_000_000.0)
+                        except Exception:
+                            pass
+                    elif k in ("speed", "bitrate", "fps", "frame"):
+                        pass  # could use for stats
+                    else:
+                        continue  # not a progress line
+
+                # Update state periodically
+                now_mono = time.monotonic()
+                if now_mono - last_update >= 0.3:
+                    last_update = now_mono
+                    base_pct = _safe_percent(processed_seconds)
+                    if total_seconds > 0 and out_time_sec > 0:
+                        concat_pct = min(1.0, out_time_sec / total_seconds)
+                        progress = base_pct + concat_pct * (1.0 - base_pct)
+                    else:
+                        progress = base_pct
+                    _update_merge_state(
+                        stage="merging",
+                        current="合并中",
+                        percent=min(progress, 0.999),
+                        total_seconds=total_seconds,
+                        processed_seconds=out_time_sec,
+                        ffmpeg_log=list(tail)[-10:],
+                    )
+
+            rc = proc.wait()
+
+            if _merge_cancel_event.is_set():
+                raise MergeCancelled("用户取消合并")
+
+            if rc != 0:
+                tail_txt = "\n".join(list(tail)[-60:])
+                raise RuntimeError("ffmpeg 合并失败：" + tail_txt)
         finally:
             _set_merge_runtime(proc=None)
 
@@ -2618,15 +2664,32 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
         output_metadata = _build_output_clip_metadata()
         output_metadata_json = json.dumps(output_metadata, ensure_ascii=False, separators=(",", ":"))
         output_metadata_desc = f"online-slicer clips={len(metadata_clips)} duration={_round_meta_seconds(metadata_output_cursor)}s"
+
+        # Write full metadata to sidecar file
+        meta_sidecar = out_path.with_suffix(out_path.suffix + ".meta.json")
+        try:
+            meta_sidecar.write_text(output_metadata_json, encoding="utf-8")
+        except Exception:
+            pass
+
+        # Use ffmetadata file to avoid ARG_MAX overflow (ENO7) from huge -metadata comment=
+        meta_ff = TMP_OUTPUT_DIR / f"{job.id}_metadata.txt"
+        meta_ff.write_text(
+            ";FFMETADATA1\n"
+            f"title={out_path.stem}\n"
+            "encoded_by=online-slicer\n"
+            "bililive_slicer_schema=bililive-slicer.clips.v1\n"
+            f"description={output_metadata_desc}\n"
+            f"comment={output_metadata_json}\n",
+            encoding="utf-8"
+        )
+        temp_files.append(meta_ff)
+
         cmd_concat = [
             "ffmpeg", "-hide_banner", "-y",
             "-f", "concat", "-safe", "0", "-i", str(list_file),
-            "-map_metadata", "-1",
-            "-metadata", f"title={out_path.stem}",
-            "-metadata", "encoded_by=online-slicer",
-            "-metadata", "bililive_slicer_schema=bililive-slicer.clips.v1",
-            "-metadata", f"description={output_metadata_desc}",
-            "-metadata", f"comment={output_metadata_json}",
+            "-f", "ffmetadata", "-i", str(meta_ff),
+            "-map_metadata", "1",
             "-movflags", "+faststart+use_metadata_tags",
             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
             str(out_path),
@@ -2636,12 +2699,14 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
             stage="merging",
             current="合并中",
             percent=max(_safe_percent(processed_seconds), 0.98),
+            total_seconds=total_seconds_all,
+            processed_seconds=0.0,
             clips=list(clips_info),
             current_command=cmd_concat_display,
             ffmpeg_log=[],
             ffmpeg_stats="",
         )
-        _run_ffmpeg_concat_with_cancel(cmd_concat)
+        _run_ffmpeg_concat_with_cancel(cmd_concat, total_seconds=total_seconds_all)
         job.status = "done"
 
         # ---------- new feature: relocate merged result to finished directory ----------
