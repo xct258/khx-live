@@ -58,14 +58,55 @@ _log_cleanup_once() {
 
 log_usage() {
   cat << EOF >&2
-用法: log 日志级别 日志消息
-  日志级别必须是以下之一：debug, success, info, warn, error, fatal
-  日志消息是你想记录的文本内容
+======================================================================
+📖 Bash 日志模块 (Logger) 使用说明
+======================================================================
 
-示例:
-  log info "这是一条信息日志"
-  log warn "这是警告信息"
-  log error "发生了错误"
+【引入方式】
+  此脚本为模块库，请勿直接运行。必须在你的业务脚本中引入：
+  source /path/to/logger.sh
+
+【基本用法】
+  命令: log <日志级别> <日志消息>
+
+  支持的日志级别及效果：
+    debug   -> 🐞 (调试信息)
+    success -> 🎉 (成功消息)
+    info    -> ✅ (常规信息)
+    warn    -> ⚠️ (警告信息)
+    error   -> ❌ (错误信息)
+    fatal   -> 💀 (致命错误)
+
+【环境变量配置】(可选，需在调用前定义)
+  LOG_BASE_DIR   自定义日志存储的根目录。
+                 默认值: 引入该模块的脚本所在目录下的 logs/ 文件夹
+  LOG_MAX_FILES  自定义单个脚本保留的最大历史日志文件数量。
+                 默认值: 30
+
+【高级功能】
+  命令: log_reset_session
+  作用: 清除当前脚本的日志文件路径和清理标记缓存。
+  场景: 专为“无限循环/常驻后台”的脚本设计。在脚本循环体中检测到跨天
+        (日期变化) 时调用此命令，即可强制生成新日期的日志文件，并自动
+        触发旧日志的清理机制。
+
+【示例代码】
+  # 1. 常规使用
+  log info "正在连接数据库..."
+  log error "数据库连接超时！"
+
+  # 2. 自定义配置并引入
+  export LOG_MAX_FILES=7
+  export LOG_BASE_DIR="/var/log/my_app"
+  source ./logger.sh
+  log success "服务已启动，日志最多保留7天"
+
+  # 3. 常驻后台脚本跨天自动轮转
+  if [[ "\$(date '+%d')" != "\$LAST_DAY" ]]; then
+      log_reset_session
+      LAST_DAY="\$(date '+%d')"
+  fi
+======================================================================
 EOF
 }
 # 打印日志使用说明到标准错误流，方便用户了解如何调用 log 函数
@@ -94,15 +135,18 @@ log() {
   base=$(_log_get_caller_base)
   # 调用私有函数获取调用脚本的基础名称
 
+  # 分配 Emoji 和 终端颜色
+  local color_reset="\033[0m"
+  local color_code=""
+
   case "$level" in
-    debug)   symbol="🐞" ;;
-    success) symbol="🎉" ;;
-    info)    symbol="✅" ;;
-    warn)    symbol="⚠️" ;;
-    error)   symbol="❌" ;;
-    fatal)   symbol="💀" ;;
+    debug)   symbol="🐞"; color_code="\033[38;5;244m" ;; # 灰色
+    success) symbol="🎉"; color_code="\033[32m" ;;       # 绿色
+    info)    symbol="✅"; color_code="\033[36m" ;;       # 青色
+    warn)    symbol="⚠️"; color_code="\033[33m" ;;       # 黄色
+    error)   symbol="❌"; color_code="\033[31m" ;;       # 红色
+    fatal)   symbol="💀"; color_code="\033[41;37m" ;;    # 红底白字
   esac
-  # 根据日志级别选择对应的 Emoji 符号，用于标记日志类型
 
   # 下面是日志写入逻辑（保持不变）
   if [[ -z "${_log_file_map[$base]}" ]]; then
@@ -116,7 +160,7 @@ log() {
     mkdir -p "$log_dir"
     # 创建目录，包含中间不存在的目录
 
-    local unique_id="${base}_$(date '+%H时%M分%S秒')"
+    local unique_id="${base}_$(date '+%H时%M分%S秒')_$$"
     # 生成日志文件名唯一标识，包含脚本名 + 当前时间时分秒 + 当前进程号
 
     _log_file_map[$base]="$log_dir/${unique_id}.log"
@@ -124,15 +168,46 @@ log() {
   fi
 
   log_file="${_log_file_map[$base]}"
+
   # 取出当前调用脚本对应的日志文件路径
 
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
   # 生成当前时间戳，格式为 年-月-日 时:分:秒
 
-  echo "[$ts] [$base] $symbol $message" >> "$log_file"
-  # 以追加方式写入日志，格式示例：
-  # [2025-07-15 22:30:45] [myscript] ✅ 这是一条信息日志
+  # 1. 组装纯文本日志，追加到日志文件
+  local plain_log="[$ts] [$base] $symbol $message"
+  echo "$plain_log" >> "$log_file"
+
+  # 2. 如果当前是在终端交互执行（而不是后台静默运行），则输出带颜色的日志
+  if [ -t 1 ]; then
+    echo -e "${color_code}[$ts] [$base] $symbol $message${color_reset}"
+  fi
 
   _log_cleanup_once "$base"
-  # 执行一次清理旧日志的操作（但实际只有第一次调用时执行）
 }
+
+# 公开：允许外部常驻脚本手动重置日志文件和清理状态
+log_reset_session() {
+  local caller="${BASH_SOURCE[1]}"
+  local base
+  base="$(basename "$caller" .sh)"
+
+  # 彻底清除当前调用脚本的缓存和清理标记
+  unset "_log_file_map[$base]"
+  unset "_log_cleanup_done_map[$base]"
+}
+
+# ==========================================
+# 模块独立运行处理
+# ==========================================
+# 判断当前脚本是被直接执行（./logger.sh），还是被 source 引入
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "💡 提示: 这是一个日志模块库文件，请在其他脚本中使用 'source' 引入它，而不是直接运行。" >&2
+  echo "----------------------------------------------------------------------" >&2
+
+  # 调用已定义的函数打印使用方法
+  log_usage 
+
+  # 正常退出，不执行任何业务逻辑
+  exit 0
+fi
