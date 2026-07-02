@@ -110,12 +110,12 @@ if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
   if ! grep -q "INTEL_GPU_INSTALLED" "$STATUS_FILE"; then
     log info "检测到开启 Intel 核显加速，正在安装驱动..."
     
-    apt update
-    apt install -y gpg wget
-    wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
-    echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
-    apt update
-    apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
+    apt update > /dev/null 2>&1
+    apt install -y gpg wget > /dev/null 2>&1
+    wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg > /dev/null 2>&1
+    echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" > /etc/apt/sources.list.d/intel-gpu-jammy.list
+    apt update > /dev/null 2>&1
+    apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo > /dev/null 2>&1
 
     if [ $? -eq 0 ]; then
       CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
@@ -213,11 +213,15 @@ else
   else
     log info "检测是否需要更新录播姬配置：$UPDATE_SCRIPT"
     if command -v python3 >/dev/null 2>&1; then
-      python3 "$UPDATE_SCRIPT" --check
+      UPDATE_OUTPUT=$(python3 "$UPDATE_SCRIPT" --check)
       UPDATE_RESULT=$?
+      log info "更新脚本输出:"
+      log info "$UPDATE_OUTPUT"
     elif command -v python >/dev/null 2>&1; then
-      python "$UPDATE_SCRIPT" --check
+      UPDATE_OUTPUT=$(python "$UPDATE_SCRIPT" --check)
       UPDATE_RESULT=$?
+      log info "更新脚本输出:"
+      log info "$UPDATE_OUTPUT"
     else
       log warn "未找到 python，无法执行更新脚本"
       UPDATE_RESULT=254
@@ -241,11 +245,15 @@ else
     else
       log info "录播姬已停止，执行一次更新脚本以写入配置。"
       if command -v python3 >/dev/null 2>&1; then
-        python3 "$UPDATE_SCRIPT"
+        UPDATE_OUTPUT=$(python3 "$UPDATE_SCRIPT")
         UPDATE_RESULT2=$?
+        log info "更新脚本输出:"
+        log info "$UPDATE_OUTPUT"
       elif command -v python >/dev/null 2>&1; then
-        python "$UPDATE_SCRIPT"
+        UPDATE_OUTPUT=$(python "$UPDATE_SCRIPT")
         UPDATE_RESULT2=$?
+        log info "更新脚本输出:"
+        log info "$UPDATE_OUTPUT"
       else
         log warn "未找到 python，无法执行更新脚本"
         UPDATE_RESULT2=254
