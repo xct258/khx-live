@@ -81,6 +81,11 @@ chmod +x /root/BililiveRecorder/BililiveRecorder.Cli
 # 下载容器所需脚本
 # 创建相关目录
 mkdir -p /opt/bililive/config /opt/bililive/scripts /opt/bililive/biliup /opt/webclip /opt/webclip/static /opt/webclip/templates /opt/opencc
+
+# 下载日志写入脚本
+wget -O /opt/bililive/scripts/log.sh https://raw.githubusercontent.com/xct258/common/main/sh脚本/log.sh
+
+
 # 下载视频处理相关脚本
 wget -O /opt/bililive/config/config.conf https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/config.conf
 wget -O /opt/bililive/scripts/录播上传备份脚本.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/录播上传备份脚本.sh
@@ -88,7 +93,6 @@ wget -O /opt/bililive/scripts/压制视频.py https://raw.githubusercontent.com/
 wget -O /opt/bililive/scripts/视频信息获取.py https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/视频信息获取.py
 wget -O /opt/bililive/scripts/ffmpeg视频处理.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/ffmpeg视频处理.sh
 wget -O /opt/bililive/biliup/biliup后处理.sh https://raw.githubusercontent.com/xct258/khx-live/main/biliup/biliup后处理.sh
-wget -O /opt/bililive/scripts/log.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/log.sh
 wget -O /opt/bililive/scripts/自动选择onedrive网盘.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/自动选择onedrive网盘.sh
 wget -O /opt/bililive/scripts/弹幕偏移脚本.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/弹幕偏移脚本.sh
 wget -O /opt/bililive/scripts/xml转ass.sh https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/xml转ass.sh

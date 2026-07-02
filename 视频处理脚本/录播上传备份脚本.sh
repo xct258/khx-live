@@ -8,6 +8,7 @@ source_backup="/rec"
 source /rec/config.conf
 
 
+# ===================== 日志增强：辅助函数 =====================
 # 生成压制弹幕版上传描述的函数
 generate_upload_desc() {
   local stream_title="$1"
@@ -26,11 +27,62 @@ generate_upload_desc() {
     -e "/^封面时间：.*P 0$/d"
 }
 
-# 引入日志函数库
-export LOG_BASE_DIR="/rec/logs"
-source "/rec/脚本/log.sh"
+# 封装的文件大小格式化
+format_size() {
+  local bytes=$1
+  if (( bytes < 1024 )); then echo "${bytes}B"
+  elif (( bytes < 1048576 )); then echo "$(( bytes / 1024 ))KB"
+  elif (( bytes < 1073741824 )); then echo "$(( bytes / 1048576 ))MB"
+  else echo "$(( bytes / 1073741824 ))GB"
+  fi
+}
 
-log info "脚本开始执行"
+# 获取目录下视频文件总大小
+dir_video_size() {
+  local dir="$1"
+  local total=0
+  while IFS= read -r -d '' f; do
+    size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+    (( total += size ))
+  done < <(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -print0 2>/dev/null)
+  echo "$total"
+}
+
+# 引入日志函数库
+source "/rec/脚本/log.sh"
+LOG_BASE_DIR="/rec/logs"
+LOG_APP_NAME="上传备份脚本"
+
+# ===================== 脚本执行起点 =====================
+SCRIPT_START_TS=$(date +%s)
+log info "═══════════════════════════════════════════════"
+log info "  脚本开始执行"
+log info "  服务器: ${server_name:-未知}"
+log info "  工作目录: ${source_backup}"
+log info "  配置文件: /rec/config.conf"
+log info "═══════════════════════════════════════════════"
+
+# 记录磁盘空间
+log info "磁盘使用情况 ——$(df -h "$source_backup" 2>/dev/null | awk 'NR==2{printf " 总量:%s 已用:%s 可用:%s 使用率:%s", $2, $3, $4, $5}')"
+
+# 记录关键配置状态
+log info "配置状态 —— 弹幕压制:${ENABLE_DANMAKU_OVERLAY:-false} 视频上传:${ENABLE_VIDEO_UPLOAD:-false} 网盘备份:${ENABLE_RCLONE_UPLOAD:-false} 自动清理:${ENABLE_CLEANUP:-false} FLV转换:${CONVERT_FLV_TO_MP4:-false}"
+log info "保留天数: ${RETENTION_DAYS:-3} 天"
+
+# 全局统计
+TOTAL_CLEANED_SMALL=0        # 清理的小视频数量
+TOTAL_FILES_MOVED=0          # 移动的文件数
+TOTAL_CONVERT_OK=0           # 转换成功数
+TOTAL_CONVERT_FAIL=0         # 转换失败数
+TOTAL_DIR_PROCESSED=0        # 处理目录数
+TOTAL_DIR_FAILED=0           # 失败目录数
+TOTAL_DANMAKU_OK=0           # 弹幕压制成功数
+TOTAL_DANMAKU_SKIP=0         # 弹幕压制跳过数
+TOTAL_UPLOAD_OK=0            # 投稿成功数
+TOTAL_UPLOAD_FAIL=0          # 投稿失败数
+TOTAL_RCLONE_OK=0            # 网盘备份成功数
+TOTAL_RCLONE_FAIL=0          # 网盘备份失败数
+TOTAL_DELETED_DIRS=0         # 清理删除的目录数
 
 # 检查 source_folders 中的文件夹是否存在，不存在则创建,防止脚本报错
 for source_folder in "${source_folders[@]}"; do
@@ -52,37 +104,57 @@ done < <(find "${source_folders[@]}" -type d -not -empty -print0)
 if [[ ${#directories[@]} -eq 0 ]]; then
   log info "未发现待处理的视频目录"
 else
+  log info "共发现 ${#directories[@]} 个待处理目录"
+
   # 遍历每个非空目录
   for dir in "${directories[@]}"; do
     upload_success=true
-    log info "处理目录: ${dir}"
+    ((TOTAL_DIR_PROCESSED++))
+    DIR_START_TS=$(date +%s)
+
+    # 日志节目标记
+    log info "╔══════════════════════════════════════════╗"
+    log info "║  处理目录 #${TOTAL_DIR_PROCESSED}: $(basename "$dir")"
+    log info "║  完整路径: ${dir}"
+    log info "╚══════════════════════════════════════════╝"
+
+    # 记录处理前目录状态
+    pre_count=$(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" -o -name "*.xml" \) 2>/dev/null | wc -l)
+    pre_size=$(dir_video_size "$dir")
+    log info "处理前信息 —— 文件数:${pre_count} 视频总大小:$(format_size $pre_size)"
 
     # --- 第一阶段：极速清理小视频及其关联 XML ---
-    # 【核心修复】仅依赖 find 的 -size -10M 参数，直接读取底层文件系统元数据，零 I/O 负担
-    find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -size -10M -print0 |
+    # 依赖 find 的 -size -10M 参数，直接读取底层文件系统元数据，零 I/O 负担
+    clean_count=0
     while IFS= read -r -d '' video; do
-        log info "视频过小 (<10MB): $video，执行清理"
+        ((clean_count++))
+        vsize=$(stat -c%s "$video" 2>/dev/null || echo 0)
+        log info "视频过小 (<10MB): $video (大小:$(format_size $vsize))，执行清理"
         base_path="${video%.*}"
         rm -f "$video"
+        ((TOTAL_CLEANED_SMALL++))
         
         # 同步尝试删除同名的 XML
         if [[ -f "${base_path}.xml" ]]; then
             rm -f "${base_path}.xml"
             log info "同步删除关联的 XML: ${base_path}.xml"
         fi
-    done
+    done < <(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -size -10M -print0)
+
+    if [[ $clean_count -gt 0 ]]; then
+      log info "第一阶段完成：共清理 ${clean_count} 个小视频"
+    fi
 
     # --- 第二阶段：重新读取有效文件路径，并提取元数据 ---
-    # 清理完小垃圾文件后，重新获取剩余的真实有效文件列表
-    # mapfile (或 readarray) 能够绝对安全地处理带空格等特殊字符的文件名
     mapfile -t input_files < <(find "$dir" -type f \( -name "*.flv" -o -name "*.mp4" -o -name "*.xml" \) | sort)
 
-    # 【重要保护】如果清理小文件后，目录变空了，直接删除目录并跳过后续逻辑
     if [[ ${#input_files[@]} -eq 0 ]]; then
         log info "目录 ${dir} 清理后已无有效视频，直接移除"
         rm -rf "$dir"
         continue
     fi
+    
+    log info "清理后剩余 ${#input_files[@]} 个有效文件"
 
     # 获取第一个有效文件的信息，用于提取直播开始时间和主播名称
     first_file="${input_files[0]}"
@@ -105,40 +177,53 @@ else
     cache_dir="${source_backup}/正在处理中/${streamer_name}/${start_time}"
     mkdir -p "$cache_dir"
     cache_dirs+=("$cache_dir")
+    log info "缓存目录: ${cache_dir}"
 
     # --- 第三阶段：处理有效的大视频和 XML 的移动/转换 ---
-    # 直接遍历刚刚获取到的有效数组 input_files，避免重复执行 find
     for file in "${input_files[@]}"; do
-        [[ ! -f "$file" ]] && continue # 防御性检查：确保文件真实存在
+        [[ ! -f "$file" ]] && continue
 
         ext="${file##*.}"
         filename="$(basename "$file" ."$ext")"
+        fsize=$(stat -c%s "$file" 2>/dev/null || echo 0)
 
         case "$ext" in
             xml|mp4)
-                log info "移动文件: $file"
-                mv "$file" "$cache_dir/" || upload_success=false
+                log info "移动文件: $file (大小:$(format_size $fsize) 类型:$ext)"
+                if mv "$file" "$cache_dir/"; then
+                    ((TOTAL_FILES_MOVED++))
+                else
+                    upload_success=false
+                fi
                 ;;
             flv)
-                # 如果未启用弹幕压制且配置禁用转换，则直接移动原文件
                 if [[ "$CONVERT_FLV_TO_MP4" != "true" && "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
-                    log info "配置禁用 flv 转换，直接移动原文件: $file"
-                    mv "$file" "$cache_dir/" || upload_success=false
+                    log info "配置禁用 flv 转换，直接移动原文件: $file (大小:$(format_size $fsize))"
+                    if mv "$file" "$cache_dir/"; then
+                        ((TOTAL_FILES_MOVED++))
+                    else
+                        upload_success=false
+                    fi
                     continue
                 fi
 
-                # 需要转换为 mp4
                 output_file="$cache_dir/${filename}.mp4"
-                log info "转换视频: $file -> $output_file"
-                # 使用 copy 模式极速封转，-loglevel error 避免输出过多无用日志
+                log info "转换视频: $(basename "$file") (大小:$(format_size $fsize)) -> $(basename "$output_file")"
+                CONV_START_TS=$(date +%s%N)
                 if ffmpeg -i "$file" -c:v copy -c:a copy -loglevel error -y "$output_file"; then
+                    CONV_ELAPSED=$(( ($(date +%s%N) - CONV_START_TS) / 1000000 ))
+                    out_size=$(stat -c%s "$output_file" 2>/dev/null || echo 0)
                     rm -f "$file"
-                    log success "转换成功并清理源文件"
+                    log success "转换成功（耗时:${CONV_ELAPSED}ms 输出大小:$(format_size $out_size)），已清理源文件"
+                    ((TOTAL_CONVERT_OK++))
+                    ((TOTAL_FILES_MOVED++))
                 else
-                    log error "转换失败：$file，保留原视频并使用原文件"
-                    # 转换失败时直接使用原视频，将其移动到缓存目录
+                    CONV_ELAPSED=$(( ($(date +%s%N) - CONV_START_TS) / 1000000 ))
+                    log error "转换失败（耗时:${CONV_ELAPSED}ms）：$file，保留原视频"
+                    ((TOTAL_CONVERT_FAIL++))
                     if mv "$file" "$cache_dir/"; then
-                        log info "转换失败，已将原文件移动到缓存目录：$cache_dir"
+                        log info "已将原文件移动到缓存目录"
+                        ((TOTAL_FILES_MOVED++))
                     else
                         log error "无法移动原视频到缓存目录：$file"
                         upload_success=false
@@ -149,12 +234,13 @@ else
     done
 
     # --- 第四阶段：收尾 ---
-    # 如果所有移动/转换都成功，则删除原目录
+    DIR_ELAPSED=$(( $(date +%s) - DIR_START_TS ))
     if $upload_success; then
         rm -rf "$dir"
-        log success "处理完毕，删除原目录成功：$dir"
+        log success "目录处理完成（耗时:${DIR_ELAPSED}s），已删除原目录：$dir"
     else
-        log error "目录 ${dir} 中有文件处理失败，保留原目录以备人工检查"
+        log error "目录 ${dir} 中有文件处理失败（耗时:${DIR_ELAPSED}s），保留原目录以备人工检查"
+        ((TOTAL_DIR_FAILED++))
     fi
   done
 fi
@@ -164,13 +250,16 @@ fi
 if [[ ${#cache_dirs[@]} -eq 0 ]]; then
   log info "无新生成的备份目录需要处理"
 else
-  # 按时间排序备份目录
-  mapfile -t sorted_cache_dirs < <(printf '%s\n' "${cache_dirs[@]}" | sort)
+  log info "共 ${#cache_dirs[@]} 个备份目录待处理"
 
-  for cache_dir in "${sorted_cache_dirs[@]}"; do
-    # 再次防御性检查，防止 mapfile 读取到空行
+  for cache_dir in "${cache_dirs[@]}"; do
     [[ -z "$cache_dir" ]] && continue
-    log info "处理备份目录：$cache_dir"
+
+    BACKUP_START_TS=$(date +%s)
+    log info "╔══════════════════════════════════════════╗"
+    log info "║  处理备份目录: $(basename "$cache_dir")"
+    log info "║  完整路径: ${cache_dir}"
+    log info "╚══════════════════════════════════════════╝"
   
     # 声明数组，用于存储上传到B站视频的文件名
     compressed_files=()
@@ -214,9 +303,11 @@ else
       streamer_name="括弧笑bilibili"
     fi
 
-    log info "直播标题: $stream_title"
-    log info "录制平台: $recording_platform"
-    log info "主播名称: $streamer_name"
+    log info "元数据 —— 直播标题: $stream_title"
+    log info "元数据 —— 录制平台: $recording_platform"
+    log info "元数据 —— 主播名称: $streamer_name"
+    log info "元数据 —— 开播时间: $start_time"
+    log info "元数据 —— 上传标题: ${formatted_start_time_4} [${stream_title}]"
 
     for video_file in "${input_files[@]}"; do
       if [[ -f "$video_file" ]]; then
@@ -243,45 +334,50 @@ else
             output_file="投稿版-${filename_no_ext}.mp4"
 
             # ==================== 1. 先检查是否启用了弹幕压制 ====================
+            danmaku_action="跳过"
             if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
+              danmaku_reason="弹幕压制已禁用"
               log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY），跳过所有检测与压制"
               compressed_files+=("${cache_dir}/${filename}")
             
             # ==================== 2. 启用后，再检查弹幕 XML 是否存在 ====================
             elif [[ ! -f "${cache_dir}/${xml_file}" ]]; then
+              danmaku_reason="未检测到弹幕 XML 文件"
               log warn "未检测到弹幕 XML 文件，跳过弹幕压制：${cache_dir}/${xml_file}"
               compressed_files+=("${cache_dir}/${filename}")
 
             # ==================== 3. 存在后，再检查弹幕内容是否符合规则 ====================
             elif ! grep -aEq '^\s*<(d|sc|gift|guard)' "${cache_dir}/${xml_file}"; then
+              danmaku_reason="弹幕文件内容为空或不符合预期"
               log warn "弹幕文件内容为空或不符合预期，跳过弹幕压制：${cache_dir}/${xml_file}"
               compressed_files+=("${cache_dir}/${filename}")
 
             else
+              danmaku_reason=""
               # ==================== 4. 规则校验通过，进入时间差与压制核心逻辑 ====================
               log info "检测到有效弹幕文件，准备时间差校验：${cache_dir}"
               
-              # 通过外部脚本进行时间差校验
               DIFF_RESULT=$(/rec/脚本/对比视频和弹幕的时长.sh "$video_file" -s 2>/dev/null)
-              # 初始化一个“安全通过”标志，默认为 0（不通过）
               IS_SAFE_TO_PROCESS=0
               
               if [[ -n "$DIFF_RESULT" ]]; then
-                # 去掉正负号，获取纯数字的绝对值
                 ABS_DIFF=$(echo "$DIFF_RESULT" | tr -d '+-')
                 IS_OVER_LIMIT=$(awk -v diff="$ABS_DIFF" -v limit="$MAX_DIFF_LIMIT" 'BEGIN { print (diff > limit) ? 1 : 0 }')
                 if [[ "$IS_OVER_LIMIT" -eq 1 ]]; then
+                  danmaku_reason="时间相差过大(${DIFF_RESULT}s > ${MAX_DIFF_LIMIT}s)"
                   log warn "时间相差过大（相差 ${DIFF_RESULT} 秒，限制 ${MAX_DIFF_LIMIT} 秒），疑似网络波动，跳过弹幕压制"
                 else
                   log success "时间差校验通过（相差 ${DIFF_RESULT} 秒）"
-                  IS_SAFE_TO_PROCESS=1 # 只有拿到明确的成功数据，才标记为安全
+                  IS_SAFE_TO_PROCESS=1
                 fi
               else
-                # === 新增安全策略：对比脚本报错或没返回，强制拦截 ===
+                danmaku_reason="时间对比脚本未返回数据"
                 log error "安全拦截：时间对比脚本未返回任何数据（可能发生错误），为防同步异常，拒绝执行弹幕压制"
               fi
 
               if [[ "$IS_SAFE_TO_PROCESS" -eq 1 ]]; then
+                danmaku_action="压制"
+                DANMAKU_START_TS=$(date +%s)
                 log info "开始弹幕压制：${cache_dir}"
                 # --mode both/all:       生成投稿版(无进度条) + 预览版(无进度条)
                 # --mode clean:          只生成投稿版(无进度条)，不生成预览版
@@ -289,19 +385,25 @@ else
                 # --mode preview:        只生成预览版(带进度条)
                 # --mode preview-clean:  只生成预览版(无进度条)
                 if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode both; then
+                  DANMAKU_ELAPSED=$(( $(date +%s) - DANMAKU_START_TS ))
                   if [[ -f "${cache_dir}/${output_file}" ]]; then
-                    log success "视频弹幕压制完成：$output_file"
+                    out_size=$(stat -c%s "${cache_dir}/${output_file}" 2>/dev/null || echo 0)
+                    log success "视频弹幕压制完成（耗时:${DANMAKU_ELAPSED}s 输出大小:$(format_size $out_size)）：$output_file"
                     compressed_files+=("${cache_dir}/${output_file}")
+                    ((TOTAL_DANMAKU_OK++))
                   else
-                    log error "压制脚本执行成功但未生成目标文件，使用原视频：$filename"
+                    log error "压制脚本执行成功但未生成目标文件（耗时:${DANMAKU_ELAPSED}s），使用原视频：$filename"
                     compressed_files+=("${cache_dir}/${filename}")
+                    ((TOTAL_DANMAKU_SKIP++))
                   fi
                 else
-                  log error "视频弹幕压制失败：$output_file"
+                  DANMAKU_ELAPSED=$(( $(date +%s) - DANMAKU_START_TS ))
+                  log error "视频弹幕压制失败（耗时:${DANMAKU_ELAPSED}s）：$output_file"
                   compressed_files+=("${cache_dir}/${filename}")
+                  ((TOTAL_DANMAKU_SKIP++))
                 fi
               else
-                # 未通过时间检测或脚本报错的分支，统一兜底使用原视频
+                ((TOTAL_DANMAKU_SKIP++))
                 compressed_files+=("${cache_dir}/${filename}")
               fi
             fi # 结束核心条件判断
@@ -315,12 +417,23 @@ else
     if [[ "$streamer_name" == "括弧笑bilibili" && " ${update_servers[*]} " == *" $recording_platform "* ]]; then
       # 构建视频标题（优化样式：日期 + 标题，标题用中括号包裹）
       upload_title_1="${formatted_start_time_4} [${stream_title}]"
-      
+      upload_files_count=${#compressed_files[@]}
+
+      upload_total_size=0
+      for f in "${compressed_files[@]}"; do
+        s=$(stat -c%s "$f" 2>/dev/null || echo 0)
+        (( upload_total_size += s ))
+      done
+
       if [[ "$ENABLE_VIDEO_UPLOAD" != "true" ]]; then
-        log warn "上传已被禁用，跳过投稿步骤"
+        log warn "上传已被禁用，跳过投稿步骤（共 ${upload_files_count} 个文件，总计 $(format_size $upload_total_size)）"
         danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/禁用投稿/压制版/${formatted_start_time_3}/"
       else
-        log info "开始上传视频：${compressed_files[@]}"
+        log info "开始上传视频 —— ${upload_files_count} 个文件，总计 $(format_size $upload_total_size)"
+        for f in "${compressed_files[@]}"; do
+          fs=$(stat -c%s "$f" 2>/dev/null || echo 0)
+          log info "  待上传文件: $(basename "$f") ($(format_size $fs))"
+        done
         # 正常发布
         # 视频信息获取及弹幕/封面信息（JSON格式）
         cover_json=$(python3 /rec/脚本/视频信息获取.py "$cache_dir")
@@ -343,7 +456,8 @@ else
         fi
         # ==================================
 
-        # 在命令中使用 "${cover_args[@]}" 动态展开参数
+        UPLOAD_START_TS=$(date +%s)
+
         biliup_upload_output=$("$source_backup/biliup/biliup" -u "${biliup_up_cookies}" upload \
           --copyright 2 \
           "${cover_args[@]}" \
@@ -354,13 +468,17 @@ else
           --tag "直播回放,奶茶猪,娱乐主播" \
         "${compressed_files[@]}")
 
-        # 检查是否包含“投稿成功”关键字
+        UPLOAD_ELAPSED=$(( $(date +%s) - UPLOAD_START_TS ))
         if echo "$biliup_upload_output" | grep -q "投稿成功"; then
-          log info "投稿成功"
+          log success "投稿成功（耗时:${UPLOAD_ELAPSED}s）"
+          log info "投稿输出(摘要): $(echo "$biliup_upload_output" | head -c 200)"
           danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
+          ((TOTAL_UPLOAD_OK++))
         else
-          log error "投稿失败，请检查"
+          log error "投稿失败（耗时:${UPLOAD_ELAPSED}s），请检查"
+          log info "投稿输出(摘要): $(echo "$biliup_upload_output" | head -c 300)"
           danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/投稿失败/压制版/${formatted_start_time_3}/"
+          ((TOTAL_UPLOAD_FAIL++))
         fi
       fi
 
@@ -386,7 +504,7 @@ else
         || compgen -G "${cache_dir}/*.flv" > /dev/null \
         || compgen -G "${cache_dir}/*.xml" > /dev/null; then
 
-        log info "备份录制源文件"
+        log info "备份原始录制文件"
 
         target_dir="${source_backup}/videos/${streamer_name}/原文件/${formatted_start_time_3}/"
         mkdir -p "$target_dir"
@@ -395,6 +513,11 @@ else
         mv "${cache_dir}"/*.flv "$target_dir" 2>/dev/null
         mv "${cache_dir}"/*.xml "$target_dir" 2>/dev/null
 
+        src_mp4_count=$(find "$cache_dir" -maxdepth 1 -name "*.mp4" 2>/dev/null | wc -l)
+        src_flv_count=$(find "$cache_dir" -maxdepth 1 -name "*.flv" 2>/dev/null | wc -l)
+        src_xml_count=$(find "$cache_dir" -maxdepth 1 -name "*.xml" 2>/dev/null | wc -l)
+        log info "源文件统计 —— MP4:${src_mp4_count} FLV:${src_flv_count} XML:${src_xml_count}"
+
         log info "备份完成：源文件已移动到 $target_dir"
 
         # =============================
@@ -402,18 +525,26 @@ else
         # =============================
         if [[ "$ENABLE_ASR_SUBMIT" == "true" || "$ENABLE_AUDIO_EXTRACT" == "true" ]]; then
           log info "开始从原始视频中提取音频"
+          audio_extract_ok=0
+          audio_extract_fail=0
           for video_file in "$target_dir"*.mp4 "$target_dir"*.flv; do
             if [[ -f "$video_file" ]]; then
               audio_file="${video_file%.*}.aac"
-              log info "提取音频: $video_file -> $audio_file"
+              AUDIO_START_TS=$(date +%s%N)
+              log info "提取音频: $(basename "$video_file") -> $(basename "$audio_file")"
               if ffmpeg -i "$video_file" -vn -c:a copy -loglevel error -y "$audio_file"; then
-                log success "音频提取成功: $audio_file"
+                AUDIO_ELAPSED=$(( ($(date +%s%N) - AUDIO_START_TS) / 1000000 ))
+                log success "音频提取成功（耗时:${AUDIO_ELAPSED}ms）: $(basename "$audio_file")"
                 audio_files+=("$audio_file")
+                ((audio_extract_ok++))
               else
-                log error "音频提取失败: $video_file"
+                AUDIO_ELAPSED=$(( ($(date +%s%N) - AUDIO_START_TS) / 1000000 ))
+                log error "音频提取失败（耗时:${AUDIO_ELAPSED}ms）: $video_file"
+                ((audio_extract_fail++))
               fi
             fi
           done
+          log info "音频提取完成 —— 成功:${audio_extract_ok} 失败:${audio_extract_fail}"
         fi
 
         # =============================
@@ -422,33 +553,33 @@ else
         if [[ "$ENABLE_ASR_SUBMIT" == "true" && "${#audio_files[@]}" -gt 0 ]]; then
           ASR_SERVER="${ASR_SERVER:-192.168.50.5}"
           ASR_PORT="${ASR_PORT:-8286}"
-          # 路径类型默认为 windows，可选值: windows / linux
-          ASR_PATH_TYPE="${ASR_PATH_TYPE:-windows}" 
+          ASR_PATH_TYPE="${ASR_PATH_TYPE:-windows}"
+          asr_submit_ok=0
+          asr_submit_fail=0
           log info "提交 ${#audio_files[@]} 个音频文件到语音识别后端 ${ASR_SERVER}:${ASR_PORT} (类型: ${ASR_PATH_TYPE})"
           for audio_file in "${audio_files[@]}"; do
-            log info "提交语音识别任务: $audio_file"
-            # 根据系统类型处理路径
             if [[ "$ASR_PATH_TYPE" == "linux" ]]; then
-              # Linux 路径处理：直接使用原始路径
               remote_path="$audio_file"
             else
-              # Windows 路径处理：将正斜杠转为反斜杠，替换前缀，并对反斜杠进行转义以符合 JSON 规范
               remote_path=$(echo "$audio_file" | sed \
                 -e 's|/|\\|g' \
                 -e "s|^\\\\rec\\\\videos|$ASR_REMOTE_PATH|" \
                 -e 's|\\|\\\\|g')
             fi
-            log info "后端接收路径: $remote_path"
+            log info "提交语音识别任务: $(basename "$audio_file")"
             response=$(curl -s --connect-timeout 5 --max-time 5 -X POST "http://${ASR_SERVER}:${ASR_PORT}/submit_task" \
               -H "Content-Type: application/json" \
               -d "{\"audio_path\": \"$remote_path\", \"device\": \"auto\"}")
             if echo "$response" | grep -q "task_id"; then
               task_id=$(echo "$response" | grep -o '"task_id":"[^"]*"' | cut -d'"' -f4)
               log success "语音识别任务已提交: $task_id"
+              ((asr_submit_ok++))
             else
               log error "语音识别任务提交失败: $response"
+              ((asr_submit_fail++))
             fi
           done
+          log info "语音识别提交完成 —— 成功:${asr_submit_ok} 失败:${asr_submit_fail}"
         fi
       else
         log info "未找到源文件，跳过备份源文件"
@@ -468,6 +599,9 @@ else
         fi
       fi
     fi
+
+    BACKUP_ELAPSED=$(( $(date +%s) - BACKUP_START_TS ))
+    log info "备份目录处理完毕（耗时:${BACKUP_ELAPSED}s）"
 
     # 上传rclone
     if [[ "$ENABLE_RCLONE_UPLOAD" != "true" ]]; then
@@ -489,14 +623,23 @@ else
           rclone_backup_path="$rclone_onedrive_config:/直播录制/${streamer_name}/"
         fi
 
+        rclone_total=$(find "$cache_dir" -type f 2>/dev/null | wc -l)
+        rclone_size=$(dir_video_size "$cache_dir")
+        log info "rclone 开始上传 —— 目标: ${rclone_backup_path}${formatted_start_time_3}/bilibili/$recording_platform/ 文件数:${rclone_total} 总大小:$(format_size $rclone_size)"
+        RCLONE_START_TS=$(date +%s)
         if rclone move "$cache_dir" "${rclone_backup_path}${formatted_start_time_3}/bilibili/$recording_platform/"; then
+          RCLONE_ELAPSED=$(( $(date +%s) - RCLONE_START_TS ))
+          log success "rclone 网盘备份成功（耗时:${RCLONE_ELAPSED}s），共上传 ${rclone_total} 个文件"
+          ((TOTAL_RCLONE_OK++))
           if [ -z "$(ls -A "$cache_dir")" ]; then
-            log info "rclone 网盘备份成功，删除本地文件夹"
+            log info "删除本地空文件夹: $cache_dir"
             rmdir "$cache_dir"
           fi
         else
+          RCLONE_ELAPSED=$(( $(date +%s) - RCLONE_START_TS ))
           upload_success=false
-          log warn "rclone 网盘备份失败，请检查"
+          log error "rclone 网盘备份失败（耗时:${RCLONE_ELAPSED}s），请检查"
+          ((TOTAL_RCLONE_FAIL++))
         fi
       fi
     fi
@@ -511,16 +654,16 @@ fi
 
 # 自动清理旧视频（按自然日计算）
 if [[ "$ENABLE_CLEANUP" == "true" ]]; then
+  CLEANUP_START_TS=$(date +%s)
   log info "开始清理超过 ${RETENTION_DAYS} 天的旧视频目录（按自然日计算）..."
 
-  DRY_RUN=false            # true = 只打印不删除
-  MAX_DELETE=8            # 最大删除数量保护
+  DRY_RUN=false
+  MAX_DELETE=8
 
   delete_count=0
   scanned_count=0
+  total_freed_bytes=0
 
-  # 计算自然日截止日期
-  # 例如：今天25号，RETENTION_DAYS=3 → cutoff=22号
   cutoff_date=$(date -d "${RETENTION_DAYS} days ago" +%Y-%m-%d)
 
   log info "自然日截止日期: ${cutoff_date} （早于此日期的将删除）"
@@ -529,20 +672,22 @@ if [[ "$ENABLE_CLEANUP" == "true" ]]; then
     ((scanned_count++))
     dir_name=$(basename "$dir_path")
 
-    # 只处理合法日期目录
     if date -d "$dir_name" >/dev/null 2>&1; then
 
-      # 字符串比较（YYYY-MM-DD 可以直接比较）
       if [[ "$dir_name" < "$cutoff_date" ]]; then
 
+        del_size=$(du -sb "$dir_path" 2>/dev/null | cut -f1)
+        (( total_freed_bytes += del_size ))
+
         if [[ "$DRY_RUN" == "true" ]]; then
-          log warn "[DRY-RUN] 将删除目录: $dir_path (日期: $dir_name)"
+          log warn "[DRY-RUN] 将删除目录: $dir_path (日期: $dir_name, 大小:$(format_size $del_size))"
         else
-          log info "删除目录: $dir_path (日期: $dir_name)"
+          log info "删除目录: $dir_path (日期: $dir_name, 大小:$(format_size $del_size))"
           rm -rf --one-file-system -- "$dir_path"
         fi
 
         ((delete_count++))
+        ((TOTAL_DELETED_DIRS++))
 
         if [[ "$delete_count" -ge "$MAX_DELETE" ]]; then
           log error "达到最大删除数量 ${MAX_DELETE}，停止清理（安全保护触发）"
@@ -559,12 +704,15 @@ if [[ "$ENABLE_CLEANUP" == "true" ]]; then
       -name "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"
   )
 
-  # 清理空目录（非 DRY_RUN）
   if [[ "$DRY_RUN" != "true" ]]; then
+    empty_before=$(find "${source_backup}/videos" -type d -empty 2>/dev/null | wc -l)
     find "${source_backup}/videos" -type d -empty -delete
+    empty_after=$(find "${source_backup}/videos" -type d -empty 2>/dev/null | wc -l)
+    log info "清理空目录: 清理前 ${empty_before} 个, 清理后 ${empty_after} 个"
   fi
 
-  log success "扫描完成，共扫描 ${scanned_count} 个目录，删除 ${delete_count} 个目录"
+  CLEANUP_ELAPSED=$(( $(date +%s) - CLEANUP_START_TS ))
+  log success "清理完成（耗时:${CLEANUP_ELAPSED}s），共扫描 ${scanned_count} 个目录，删除 ${delete_count} 个目录（释放 $(format_size $total_freed_bytes)）"
 
 else
   log info "已禁用自动清理，跳过清理"
@@ -573,4 +721,19 @@ fi
 # 自动更新cookies
 /rec/脚本/自动更新cookie.sh
 
+# ===================== 执行汇总 =====================
+SCRIPT_ELAPSED=$(( $(date +%s) - SCRIPT_START_TS ))
+log info "═══════════════════════════════════════════════"
+log info "  脚本执行汇总"
+log info "═══════════════════════════════════════════════"
+log info "  总耗时: ${SCRIPT_ELAPSED}s"
+log info "  处理的录制目录: ${TOTAL_DIR_PROCESSED} 个（失败 ${TOTAL_DIR_FAILED} 个）"
+log info "  清理小视频: ${TOTAL_CLEANED_SMALL} 个"
+log info "  文件移动: ${TOTAL_FILES_MOVED} 个"
+log info "  FLV→MP4转换: 成功 ${TOTAL_CONVERT_OK} / 失败 ${TOTAL_CONVERT_FAIL}"
+log info "  弹幕压制: 成功 ${TOTAL_DANMAKU_OK} / 跳过 ${TOTAL_DANMAKU_SKIP}"
+log info "  B站投稿: 成功 ${TOTAL_UPLOAD_OK} / 失败 ${TOTAL_UPLOAD_FAIL}"
+log info "  网盘备份: 成功 ${TOTAL_RCLONE_OK} / 失败 ${TOTAL_RCLONE_FAIL}"
+log info "  旧视频清理: ${TOTAL_DELETED_DIRS} 个目录"
+log info "═══════════════════════════════════════════════"
 log info "脚本执行完毕"
