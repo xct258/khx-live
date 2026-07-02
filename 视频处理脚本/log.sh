@@ -32,7 +32,7 @@ _log_get_caller_base() {
 # 私有：清理旧日志
 _log_cleanup_once() {
   local base="$1"
-  # base 参数表示调用脚本的基础名称，用于定位对应日志目录
+  # base 参数表示当前应用名，用于定位对应日志目录
 
   if [[ -z "${_log_cleanup_done_map[$base]}" ]]; then
     # 如果该 base 日志目录还没清理过，则进行清理
@@ -78,9 +78,11 @@ log_usage() {
     fatal   -> 💀 (致命错误)
 
 【环境变量配置】(可选，需在调用前定义)
+  LOG_APP_NAME   自定义日志子文件夹的名称 (及日志行中的标签)。
+                 默认值: 引入该模块的脚本名称 (去掉 .sh 后缀)
   LOG_BASE_DIR   自定义日志存储的根目录。
                  默认值: 引入该模块的脚本所在目录下的 logs/ 文件夹
-  LOG_MAX_FILES  自定义单个脚本保留的最大历史日志文件数量。
+  LOG_MAX_FILES  自定义单个应用保留的最大历史日志文件数量。
                  默认值: 30
 
 【高级功能】
@@ -93,19 +95,13 @@ log_usage() {
 【示例代码】
   # 1. 常规使用
   log info "正在连接数据库..."
-  log error "数据库连接超时！"
 
-  # 2. 自定义配置并引入
+  # 2. 自定义配置并引入 (将日志归拢到项目统一下)
+  export LOG_APP_NAME="my_core_project"
   export LOG_MAX_FILES=7
   export LOG_BASE_DIR="/var/log/my_app"
   source ./logger.sh
-  log success "服务已启动，日志最多保留7天"
-
-  # 3. 常驻后台脚本跨天自动轮转
-  if [[ "\$(date '+%d')" != "\$LAST_DAY" ]]; then
-      log_reset_session
-      LAST_DAY="\$(date '+%d')"
-  fi
+  log success "服务已启动，存放在 my_core_project 文件夹下"
 ======================================================================
 EOF
 }
@@ -132,8 +128,9 @@ log() {
   message="$*"
   # 将剩余参数作为日志消息整体保存（支持带空格的多词消息）
 
-  base=$(_log_get_caller_base)
-  # 调用私有函数获取调用脚本的基础名称
+  # --- 核心改动：优先使用环境变量作为基础名称 ---
+  base="${LOG_APP_NAME:-$(_log_get_caller_base)}"
+  # 如果外部定义了 LOG_APP_NAME 则使用它，否则使用调用脚本的文件名
 
   # 分配 Emoji 和 终端颜色
   local color_reset="\033[0m"
@@ -148,32 +145,32 @@ log() {
     fatal)   symbol="💀"; color_code="\033[41;37m" ;;    # 红底白字
   esac
 
-  # 下面是日志写入逻辑（保持不变）
+  # 下面是日志写入逻辑
   if [[ -z "${_log_file_map[$base]}" ]]; then
-    # 如果当前调用脚本没有已打开的日志文件路径，则创建新的日志文件
+    # 如果当前应用没有已打开的日志文件路径，则创建新的日志文件
     ts_dir="$(date '+%Y/%m/%d')"
-    # 生成按年月日划分的目录结构，如 2025/07/15
+    # 生成按年月日划分的目录结构，如 2026/07/02
 
     log_dir="$_log_base_dir/$base/$ts_dir"
-    # 拼接完整日志目录路径：基础日志目录 + 调用脚本名 + 日期目录
+    # 拼接完整日志目录路径：基础日志目录 + 应用名 + 日期目录
 
     mkdir -p "$log_dir"
     # 创建目录，包含中间不存在的目录
 
     local unique_id="${base}_$(date '+%H时%M分%S秒')_$$"
-    # 生成日志文件名唯一标识，包含脚本名 + 当前时间时分秒 + 当前进程号
+    # 生成日志文件名唯一标识，包含应用名 + 当前时间时分秒 + 当前进程号
 
     _log_file_map[$base]="$log_dir/${unique_id}.log"
-    # 记录当前调用脚本对应的日志文件完整路径
+    # 记录当前应用对应的日志文件完整路径
   fi
 
   log_file="${_log_file_map[$base]}"
 
-  # 取出当前调用脚本对应的日志文件路径
+  # 取出当前应用对应的日志文件路径
 
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
   # 生成当前时间戳，格式为 年-月-日 时:分:秒
-
+  
   # 1. 组装纯文本日志，追加到日志文件
   local plain_log="[$ts] [$base] $symbol $message"
   echo "$plain_log" >> "$log_file"
@@ -189,10 +186,11 @@ log() {
 # 公开：允许外部常驻脚本手动重置日志文件和清理状态
 log_reset_session() {
   local caller="${BASH_SOURCE[1]}"
-  local base
-  base="$(basename "$caller" .sh)"
-
-  # 彻底清除当前调用脚本的缓存和清理标记
+  
+  # --- 核心改动：保持与 log 函数中一致的名称获取逻辑 ---
+  local base="${LOG_APP_NAME:-$(basename "$caller" .sh)}"
+  
+  # 彻底清除当前应用的缓存和清理标记
   unset "_log_file_map[$base]"
   unset "_log_cleanup_done_map[$base]"
 }
@@ -204,10 +202,10 @@ log_reset_session() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "💡 提示: 这是一个日志模块库文件，请在其他脚本中使用 'source' 引入它，而不是直接运行。" >&2
   echo "----------------------------------------------------------------------" >&2
-
+  
   # 调用已定义的函数打印使用方法
   log_usage 
-
+  
   # 正常退出，不执行任何业务逻辑
   exit 0
 fi
