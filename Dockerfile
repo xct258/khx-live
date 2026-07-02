@@ -2,7 +2,7 @@
 FROM debian
 
 # 设置中文环境
-RUN apt-get update && apt-get install -y locales tzdata && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y locales tzdata \
     # 生成中文 locale
     && localedef -i zh_CN -c -f UTF-8 -A /usr/share/locale/locale.alias zh_CN.UTF-8
 # 设置环境变量为中文
@@ -11,8 +11,7 @@ ENV LANG=zh_CN.UTF-8
 ENV TZ=Asia/Shanghai
 
 # 安装构建所需的相关依赖
-RUN apt update \
-    && apt install -y wget \
+RUN apt install -y wget \
     # 创建临时目录
     && mkdir -p /root/tmp \
     # 下载容器构建脚本
@@ -25,7 +24,8 @@ RUN apt update \
     # 下载容器启动脚本
     && wget -O /usr/local/bin/start.sh https://raw.githubusercontent.com/xct258/khx-live/main/容器构建脚本/start.sh \
     # 赋予启动脚本执行权限
-    && chmod +x /usr/local/bin/start.sh
+    && chmod +x /usr/local/bin/start.sh \
+    && rm -rf /var/lib/apt/lists/*
 
 # 若要启动在线切片服务，请在宿主目录的 `/rec/config.conf` 中设置 ENABLE_WEBCLIP=true 并映射相应端口。环境变量方式已废弃。
 # 设置容器启动时执行的命令

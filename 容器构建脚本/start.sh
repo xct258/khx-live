@@ -15,6 +15,8 @@ mkdir -p /rec/在线切片/static
 mkdir -p /rec/在线切片/templates
 mkdir -p /rec/语音识别
 
+
+
 TOKEN_FILE="/app/.github_token"
 # 1. 如果环境变量传入了 Token，优先使用并持久化保存到文件
 if [ -n "$XCT258_GITHUB_TOKEN" ]; then
@@ -35,33 +37,6 @@ fi
 STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 source /rec/config.conf
-
-# intel核显驱动安装
-if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
-  if ! grep -q "INTEL_GPU_INSTALLED" "$STATUS_FILE"; then
-    echo "========================================="
-    echo "检测到开启 Intel 核显加速，正在安装驱动..."
-    echo "========================================="
-    
-    apt update
-    apt install -y gpg wget
-    wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
-    echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
-    apt update
-    apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
-
-    if [ $? -eq 0 ]; then
-      CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
-      echo "INTEL_GPU_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
-      echo "【成功】Intel 核显驱动安装完毕！"
-    else
-      echo "【错误】Intel 核显驱动安装失败，不写入状态。"
-      exit 1
-    fi
-  else
-    echo "【跳过】Intel 核显驱动已于历史记录中安装，无需重复检测。"
-  fi
-fi
 
 # 在线切片安装
 if [ ! -f /rec/在线切片/app.py ]; then
@@ -126,6 +101,35 @@ for file in /opt/bililive/apps/*; do
   fi
 done
 
+source /rec/脚本/log.sh
+LOG_BASE_DIR=/rec/logs
+LOG_APP_NAME="容器主脚本"
+
+# intel核显驱动安装
+if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
+  if ! grep -q "INTEL_GPU_INSTALLED" "$STATUS_FILE"; then
+    log info "检测到开启 Intel 核显加速，正在安装驱动..."
+    
+    apt update
+    apt install -y gpg wget
+    wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
+    echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy client" | tee /etc/apt/sources.list.d/intel-gpu-jammy.list
+    apt update
+    apt install -y intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 va-driver-all vainfo
+
+    if [ $? -eq 0 ]; then
+      CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+      echo "INTEL_GPU_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
+      log info "【成功】Intel 核显驱动安装完毕！"
+    else
+      log warn "【错误】Intel 核显驱动安装失败，不写入状态。"
+      exit 1
+    fi
+  else
+    log info "【跳过】Intel 核显驱动已于历史记录中安装，无需重复检测。"
+  fi
+fi
+
 # 下载私有配置文件（需 GitHub Token）
 if [ -n "$CURRENT_GITHUB_TOKEN" ]; then
 
@@ -137,7 +141,7 @@ if [ -n "$CURRENT_GITHUB_TOKEN" ]; then
   [ ! -f "/rec/cookies/bilibili/cookies-xct258-2.json" ] && missing_file=true
 
   if $missing_file; then
-    echo "检测到 CURRENT_GITHUB_TOKEN..."
+    log info "检测到 CURRENT_GITHUB_TOKEN..."
 
     mkdir -p /root/.config/rclone
     mkdir -p /rec/cookies/bilibili
@@ -163,9 +167,9 @@ if [ -n "$CURRENT_GITHUB_TOKEN" ]; then
     fi
 
     if $download_all_success; then
-      echo "✅ 私有配置文件全部已下载完成。"
+      log info "私有配置文件全部已下载完成。"
     else
-      echo "⚠️ 私有配置文件部分下载失败，请检查 GitHub Token 或网络连接。"
+      log warn "私有配置文件部分下载失败，请检查 GitHub Token 或网络连接。"
     fi
   fi
 fi
@@ -193,15 +197,9 @@ fi
 # 检查 Bililive 是否启动成功
 sleep 4
 if ! pgrep -f "BililiveRecorder.Cli" > /dev/null; then
-  echo "------------------------------------"
-  echo "$(date)"
-  echo "录播姬启动失败"
-  echo "------------------------------------"
+  log warn "录播姬启动失败"
 else
-  echo "------------------------------------"
-  echo "$(date)"
-  echo "录播姬运行中，正在检测配置更新需求..."
-  echo "------------------------------------"
+  log info "录播姬运行中，正在检测配置更新需求..."
 
   # 先检测是否有配置更新需求
   UPDATE_SCRIPT="/rec/脚本/更新录播姬配置文件.py"
@@ -210,10 +208,10 @@ else
   fi
 
   if [ ! -f "$UPDATE_SCRIPT" ]; then
-    echo "未找到更新脚本：$UPDATE_SCRIPT" >&2
+    log info "未找到更新脚本：$UPDATE_SCRIPT" >&2
     UPDATE_RESULT=253
   else
-    echo "检测是否需要更新录播姬配置：$UPDATE_SCRIPT"
+    log info "检测是否需要更新录播姬配置：$UPDATE_SCRIPT"
     if command -v python3 >/dev/null 2>&1; then
       python3 "$UPDATE_SCRIPT" --check
       UPDATE_RESULT=$?
@@ -221,15 +219,15 @@ else
       python "$UPDATE_SCRIPT" --check
       UPDATE_RESULT=$?
     else
-      echo "未找到 python，无法执行更新脚本"
+      log warn "未找到 python，无法执行更新脚本"
       UPDATE_RESULT=254
     fi
   fi
 
   if [ "$UPDATE_RESULT" -eq 0 ]; then
-    echo "无配置更新，保持当前录播姬进程。"  # 不关闭/不重启
+    log info "无配置更新，保持当前录播姬进程。"  # 不关闭/不重启
   elif [ "$UPDATE_RESULT" -eq 1 ]; then
-    echo "检测到配置需要更新，准备停止录播姬。"
+    log info "检测到配置需要更新，准备停止录播姬。"
     pkill -f "BililiveRecorder.Cli" || true
 
     timeout=30
@@ -239,9 +237,9 @@ else
     done
 
     if pgrep -f "BililiveRecorder.Cli" > /dev/null; then
-      echo "错误: 录播姬未能停止，后续不再尝试。"
+      log warn "错误: 录播姬未能停止，后续不再尝试。"
     else
-      echo "录播姬已停止，执行一次更新脚本以写入配置。"
+      log info "录播姬已停止，执行一次更新脚本以写入配置。"
       if command -v python3 >/dev/null 2>&1; then
         python3 "$UPDATE_SCRIPT"
         UPDATE_RESULT2=$?
@@ -249,26 +247,26 @@ else
         python "$UPDATE_SCRIPT"
         UPDATE_RESULT2=$?
       else
-        echo "未找到 python，无法执行更新脚本"
+        log warn "未找到 python，无法执行更新脚本"
         UPDATE_RESULT2=254
       fi
       if [ "$UPDATE_RESULT2" -eq 0 ]; then
-        echo "更新脚本执行成功（exit=$UPDATE_RESULT2）"
+        log info "更新脚本执行成功（exit=$UPDATE_RESULT2）"
       else
-        echo "警告：更新脚本执行失败（exit=$UPDATE_RESULT2）"
+        log warn "警告：更新脚本执行失败（exit=$UPDATE_RESULT2）"
       fi
 
-      echo "重新启动录播姬..."
+      log info "重新启动录播姬..."
       /root/BililiveRecorder/BililiveRecorder.Cli run --bind "http://*:2356" --http-basic-user "$Bililive_USER" --http-basic-pass "$Bililive_PASS" "/rec/录播姬" > /dev/null 2>&1 &
       sleep 4
       if pgrep -f "BililiveRecorder.Cli" > /dev/null; then
-        echo "录播姬重启成功"
+        log info "录播姬重启成功"
       else
-        echo "录播姬重启失败"
+        log warn "录播姬重启失败"
       fi
     fi
   else
-    echo "更新脚本检测异常（exit=$UPDATE_RESULT），保持当前录播姬进程不改动。"
+    log warn "更新脚本检测异常（exit=$UPDATE_RESULT），保持当前录播姬进程不改动。"
   fi
 fi
 
@@ -276,13 +274,9 @@ fi
 #/rec/biliup/biliup server --auth > /dev/null 2>&1
 
 #if ! pgrep -f "biliup" > /dev/null; then
-#  echo "$(date)"
-#  echo "biliup启动失败"
+#  log warn "biliup启动失败"
 #else
-#  echo "------------------------------------"
-#  echo "$(date)"
-#  echo "biliup运行中"
-#  echo "------------------------------------"
+#  log info "biliup运行中"
 #fi
 
 
@@ -296,9 +290,10 @@ DEFAULT_SLEEP_TIME="300"  # 每五分钟检查一次状态
 LOG_FILE="/rec/备份脚本执行日志.log"
 
 # 引入日志函数库
-export LOG_BASE_DIR="/rec/logs"
-export LOG_MAX_FILES=100
 source "/rec/脚本/log.sh"
+LOG_BASE_DIR="/rec/logs"
+LOG_APP_NAME="备份执行脚本"
+LOG_MAX_FILES=100
 
 # 用于记录上一次检查时的整体状态（0: 均静止, 1: 有目录在录制）
 LAST_STATUS=0
@@ -308,6 +303,8 @@ declare -A MISSING_DIR_REPORTED
 log info "目录监控脚本已启动..."
 
 while true; do
+  # 0. 重置日志记录
+  log_reset_session
   # 1. 读取配置文件
   if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -385,6 +382,10 @@ CONFIG_FILE="/rec/config.conf"
 STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 
+# 引入日志函数库
+source "/rec/脚本/log.sh"
+LOG_BASE_DIR="/rec/logs"
+
 if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
@@ -392,9 +393,7 @@ fi
 if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
   # 检查是否已安装过
   if ! grep -q "WEBCLIP_INSTALLED" "$STATUS_FILE"; then
-    echo "========================================="
-    echo "【子脚本】检测到开启在线切片，正在安装 Web 依赖..."
-    echo "========================================="
+    log info "检测到开启在线切片，正在安装 Web 依赖..."
     pip install \
       fastapi \
       uvicorn[standard] \
@@ -405,16 +404,16 @@ if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
 
     if [ $? -eq 0 ]; then
       echo "WEBCLIP_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
-      echo "【成功】在线切片依赖安装完毕！"
+      log info "【成功】在线切片依赖安装完毕！"
     else
-      echo "【错误】在线切片依赖安装失败！"
+      log warn "【错误】在线切片依赖安装失败！"
       exit 1
     fi
   fi
 
   # 启动服务
   if [[ -f "/rec/在线切片/app.py" ]]; then
-      echo "启动在线切片服务..."
+      log info "启动在线切片服务..."
       port="${WEBCLIP_PORT:-8186}"
       uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
   fi
@@ -431,6 +430,10 @@ CONFIG_FILE="/rec/config.conf"
 STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 
+# 引入日志函数库
+source "/rec/脚本/log.sh"
+LOG_BASE_DIR="/rec/logs"
+
 if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
@@ -438,9 +441,7 @@ fi
 if [[ "$ENABLE_OPENCC" = "true" ]]; then
   # 检查是否已安装过
 if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
-  echo "========================================="
-  echo "【子脚本】检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
-  echo "========================================="
+  log info "检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
   pip install \
     opencc \
     torch \
@@ -449,16 +450,16 @@ if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
 
   if [ $? -eq 0 ]; then
     echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
-    echo "【成功】语音识别依赖安装完毕！"
+    log info "【成功】语音识别依赖安装完毕！"
   else
-    echo "【错误】语音识别依赖安装失败！"
+    log warn "【错误】语音识别依赖安装失败！"
     exit 1
   fi
 fi
 
 # 启动服务
 if [[ -f "/rec/语音识别/app.py" ]]; then
-  echo "启动语音识别服务..."
+  log info "启动语音识别服务..."
   python3 /rec/语音识别/app.py > /dev/null 2>&1 &
 fi
 fi
@@ -467,16 +468,13 @@ chmod +x "$OPENCC_SCHEDULER_SCRIPT"
 "$OPENCC_SCHEDULER_SCRIPT" &
 
 # 输出账户信息
-echo "------------------------------------"
-echo "当前录播姬用户名:"
-echo "$Bililive_USER"
-echo "当前录播姬密码:"
-echo "$Bililive_PASS"
-echo "------------------------------------"
+log -f info "当前录播姬用户名:"
+log -f info "$Bililive_USER"
+log -f info "当前录播姬密码:"
+log -f info "$Bililive_PASS"
 #echo "biliup默认用户名为："
 #echo "biliup"
 #echo "biliup密码需要登录web界面注册"
-#echo "------------------------------------"
 
 # 保持容器运行
 tail -f /dev/null
