@@ -1125,9 +1125,24 @@ function __renderMergeStatus(state) {
             }
         }
 
-        // 渲染"全部片段"紧凑网格
+        // 渲染"全部片段"紧凑网格，或合并阶段显示合并进度
         if (clipsListEl) {
-            __renderClipList(clipsListEl, clipsList);
+            if (stageRaw === 'merging') {
+                // 合并阶段：显示合并进度条，不显示片段网格
+                const mergeSeconds = Number(s.processed_seconds ?? 0);
+                const totalSeconds = Number(s.total_seconds ?? 1);
+                const mergePct = totalSeconds > 0 ? Math.min(1, mergeSeconds / totalSeconds) : 0;
+                clipsListEl.innerHTML =
+                    `<div class="mp-merge-section">
+                        <div class="mp-merge-title">合并音视频</div>
+                        <div class="mp-merge-bar-wrap">
+                            <div class="mp-merge-bar-fill" style="width:${(mergePct * 100).toFixed(1)}%"></div>
+                        </div>
+                        <div class="mp-merge-info">${__formatClipTime(mergeSeconds)} / ${__formatClipTime(totalSeconds)}</div>
+                    </div>`;
+            } else {
+                __renderClipList(clipsListEl, clipsList);
+            }
         }
 
     }
@@ -5822,10 +5837,6 @@ const clipListModalOverlay = document.getElementById('clipListModalOverlay');
 const clipListModalClose = document.getElementById('clipListModalClose');
 if (openClipListBtn) {
     openClipListBtn.addEventListener('click', function () {
-        if (__getTotalClipCountFromVideoTasks() === 0) {
-            showAlertModal('暂无待合并片段，请先添加片段');
-            return;
-        }
         if (!clipListModalOverlay) return;
         __resetClipListBatchMode();
         clipListModalOverlay.style.display = '';
@@ -5908,8 +5919,8 @@ document.getElementById('mergeAllBtn').addEventListener('click', async () => {
         return;
     }
 
-    // 总时长限制：30 分钟
-    const MAX_TOTAL_SECONDS = 30 * 60;
+    // 总时长限制：90 分钟
+    const MAX_TOTAL_SECONDS = 90 * 60;
 
     let totalSeconds = 0;
     for (const v of videosToSend) {
