@@ -129,10 +129,12 @@ def main():
     ts = peak_time + 0.5
     cover_timestamp = int(ts)
     
-    max_attempts = 10 
+    max_attempts = 15
     attempts = 0
 
     while ts >= 0 and attempts < max_attempts:
+        if os.path.exists(output_img):
+            os.remove(output_img)
         if not extract_frame_ffmpeg(video_path, ts, output_img):
             ts -= 1
             attempts += 1
@@ -148,8 +150,9 @@ def main():
         cover_timestamp = int(ts)
         attempts += 1
 
-    if os.path.exists(output_img):
-        pass
+    if os.path.exists(output_img) and os.path.getsize(output_img) > 0:
+        result["cover_path"] = output_img
+        result["cover_time"] = format_seconds(cover_timestamp)
 
     print(json.dumps(result, ensure_ascii=False))
 
