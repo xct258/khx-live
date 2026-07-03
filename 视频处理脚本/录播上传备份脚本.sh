@@ -446,13 +446,13 @@ else
 
         upload_desc_1=$(generate_upload_desc "$stream_title" "$formatted_start_time_2" "${danmaku_count:-0}" "${cover_timestamp:-0}" "${cover_p_num:-0}")
 
-        # === 新增：检测封面文件是否存在 ===
+        # 检测封面文件是否存在 ===
         cover_args=() # 初始化一个空数组
         if [[ -f "$biliup_cover_image" ]]; then
             log info "封面文件存在，已添加封面参数。"
             cover_args=("--cover" "$biliup_cover_image")
         else
-            log info "封面文件不存在或路径无效，跳过封面上传。"
+            log warn "封面文件不存在或路径无效，跳过封面上传。"
         fi
         # ==================================
 
