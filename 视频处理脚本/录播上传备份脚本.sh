@@ -471,12 +471,10 @@ else
         UPLOAD_ELAPSED=$(( $(date +%s) - UPLOAD_START_TS ))
         if echo "$biliup_upload_output" | grep -q "投稿成功"; then
           log success "投稿成功（耗时:${UPLOAD_ELAPSED}s）"
-          log info "投稿输出(摘要): $(echo "$biliup_upload_output" | head -c 200)"
           danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
           ((TOTAL_UPLOAD_OK++))
         else
           log error "投稿失败（耗时:${UPLOAD_ELAPSED}s），请检查"
-          log info "投稿输出(摘要): $(echo "$biliup_upload_output" | head -c 300)"
           danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/投稿失败/压制版/${formatted_start_time_3}/"
           ((TOTAL_UPLOAD_FAIL++))
         fi
