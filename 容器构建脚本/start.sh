@@ -315,7 +315,6 @@ log info "═══════════════════════�
 
 while true; do
   ((ITERATION_COUNT++))
-  log_reset_session
 
   if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -375,6 +374,8 @@ while true; do
       /rec/脚本/录播上传备份脚本.sh >> "$LOG_FILE" 2>&1
       BACKUP_ELAPSED=$(( $(date +%s) - BACKUP_START_TS ))
       log info "备份脚本执行完毕（耗时:${BACKUP_ELAPSED}s）"
+      log_reset_session
+      log info 日志已重置
       LAST_STATUS=0
     fi
   fi
