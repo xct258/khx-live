@@ -306,7 +306,7 @@ PREVIOUS_ACTIVE_FILES=""      # 录制中用来比对新增文件的“当前活
 HISTORY_ACTIVE_FILES=""       # 【新增】用来做最终存在性检测的“全量历史累加池”
 declare -A MISSING_DIR_REPORTED
 
-DEFAULT_SLEEP_TIME="5"          # 循环时间（秒）
+DEFAULT_SLEEP_TIME="300"          # 循环时间（秒）
 SCAN_FRESHNESS_MIN="20"         # find 直接查找的时间（分钟）
 
 print_welcome_banner() {
