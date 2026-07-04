@@ -294,7 +294,6 @@ cat << 'EOF' > "$SCHEDULER_SCRIPT"
 #!/bin/bash
 
 CONFIG_FILE="/rec/config.conf"
-DEFAULT_SLEEP_TIME="300"
 LOG_FILE="/rec/备份脚本执行日志.log"
 
 source "/rec/脚本/log.sh"
@@ -303,18 +302,26 @@ LOG_APP_NAME="备份执行脚本"
 LOG_MAX_FILES=100
 
 LAST_STATUS=0
+PREVIOUS_ACTIVE_FILES=""      # 录制中用来比对新增文件的“当前活跃快照”
+HISTORY_ACTIVE_FILES=""       # 【新增】用来做最终存在性检测的“全量历史累加池”
 declare -A MISSING_DIR_REPORTED
-TRANSITION_COUNT=0
-ITERATION_COUNT=0
 
-log info "═══════════════════════════════════════════════"
-log info "  目录监控脚本已启动"
-log info "  检查间隔: ${DEFAULT_SLEEP_TIME}s"
-log info "文件写入静默阈值: 20 分钟"
-log info "═══════════════════════════════════════════════"
+DEFAULT_SLEEP_TIME="5"          # 循环时间（秒）
+SCAN_FRESHNESS_MIN="20"         # find 直接查找的时间（分钟）
+
+print_welcome_banner() {
+  log info "═══════════════════════════════════════════════"
+  log info "  目录监控脚本已启动/重置"
+  log info "  检查间隔: ${DEFAULT_SLEEP_TIME}s"
+  log info "  文件写入静默阈值: 直接使用 find 过滤 ${SCAN_FRESHNESS_MIN} 分钟"
+  log info "  安全防护机制: 历史视频存在性文件级熔断自检"
+  log info "═══════════════════════════════════════════════"
+}
+
+# 启动打印
+print_welcome_banner
 
 while true; do
-  ((ITERATION_COUNT++))
 
   if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -331,7 +338,7 @@ while true; do
 
   ANY_RECORDING=false
   SAVED_RECENT_FILES=""
-  NEWEST_TS=0
+  
   for folder in "${source_folders[@]}"; do
     if [[ ! -d "$folder" ]]; then
       if [[ -z "${MISSING_DIR_REPORTED[$folder]}" ]]; then
@@ -341,44 +348,88 @@ while true; do
       continue
     fi
 
-    RECENT_FILES=$(find "$folder" -type f -mmin -20 2>/dev/null)
+    # 直接查找 20 分钟内是否有新文件写入
+    RECENT_FILES=$(find "$folder" -type f -mmin -"$SCAN_FRESHNESS_MIN" 2>/dev/null)
     if [[ -n "$RECENT_FILES" ]]; then
       ANY_RECORDING=true
       SAVED_RECENT_FILES="${SAVED_RECENT_FILES}${RECENT_FILES}"$'\n'
-      FOLDER_NEWEST=$(find "$folder" -type f -mmin -20 -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
-      NEWEST_TS=$(awk -v a="$NEWEST_TS" -v b="$FOLDER_NEWEST" 'BEGIN { print (a > b) ? a : b }')
     fi
   done
 
-  COOLDOWN=1200
+  # 核心状态控制逻辑
   if [[ "$ANY_RECORDING" = true ]]; then
+    CURRENT_ACTIVE_FILES=$(echo "$SAVED_RECENT_FILES" | sed '/^\s*$/d')
+    file_count=$(echo "$CURRENT_ACTIVE_FILES" | wc -l)
+
     if [[ $LAST_STATUS -eq 0 ]]; then
-      ((TRANSITION_COUNT++))
-      file_count=$(echo "$SAVED_RECENT_FILES" | sed '/^\s*$/d' | wc -l)
-      log info "检测到录制中（过渡 #${TRANSITION_COUNT}），${file_count} 个文件活跃"
-      echo "$SAVED_RECENT_FILES" | sed '/^\s*$/d' | while read -r file; do
-        log info "  写入文件: $file"
+      log info "检测到新录制启动，当前有 ${file_count} 个文件处于活跃写入状态："
+      echo "$CURRENT_ACTIVE_FILES" | while read -r file; do
+        log info "录制文件: $file"
       done
-    elif [[ $LAST_STATUS -eq 1 ]] && [[ $NEWEST_TS -gt 0 ]]; then
-      REMAIN=$(( (COOLDOWN - ($(date +%s) - ${NEWEST_TS%.*})) / 60 ))
-      if [[ $REMAIN -gt 0 ]]; then
-        log info "录制已停止，等待静默确认... 剩余 ${REMAIN} 分钟后执行备份"
-      fi
+      LAST_STATUS=1
+    else
+      # 录制中，比对并追加新文件到日志
+      echo "$CURRENT_ACTIVE_FILES" | while read -r file; do
+        if ! echo "$PREVIOUS_ACTIVE_FILES" | grep -Fqx "$file" 2>/dev/null; then
+          log info "新增文件: $file"
+        fi
+      done
     fi
-    LAST_STATUS=1
+    
+    # 更新快照用于下一次比对新文件
+    PREVIOUS_ACTIVE_FILES="$CURRENT_ACTIVE_FILES"
+    
+    # 🌟 动态更新“历史全量池”，把整场录制产生过的文件合并、去重累加进去
+    if [[ -z "$HISTORY_ACTIVE_FILES" ]]; then
+      HISTORY_ACTIVE_FILES="$CURRENT_ACTIVE_FILES"
+    else
+      HISTORY_ACTIVE_FILES=$(echo -e "${HISTORY_ACTIVE_FILES}\n${CURRENT_ACTIVE_FILES}" | sort -u)
+    fi
+
   else
+    # 进入 SCAN_FRESHNESS_MIN 分钟完全无新写入的状态
     if [[ $LAST_STATUS -eq 1 ]]; then
-      ((TRANSITION_COUNT++))
-      log info "录制结束（过渡 #${TRANSITION_COUNT}），20 分钟无写入，开始执行备份脚本..."
-      BACKUP_START_TS=$(date +%s)
-      /rec/脚本/录播上传备份脚本.sh >> "$LOG_FILE" 2>&1
-      BACKUP_ELAPSED=$(( $(date +%s) - BACKUP_START_TS ))
-      log info "备份脚本执行完毕（耗时:${BACKUP_ELAPSED}s）"
+      
+      log info "${SCAN_FRESHNESS_MIN}分钟无新写入，正在执行备份前置自检：检查本轮录制文件的存在性..."
+      
+      # 🛡️ 核心自检：遍历历史记录里出现过的文件，只要有一个还活在硬盘上就判定安全
+      ANY_FILE_EXISTS=false
+      total_checked=0
+      
+      while read -r file; do
+        [[ -z "$file" ]] && continue
+        ((total_checked++))
+        if [[ -f "$file" ]]; then
+          ANY_FILE_EXISTS=true
+          break # 只要抓到一个活着的视频，就通过验证，不需要往下看了
+        fi
+      done <<< "$HISTORY_ACTIVE_FILES"
+
+      # 根据自检结果决定是否熔断
+      if [[ "$ANY_FILE_EXISTS" = false ]] && [[ $total_checked -gt 0 ]]; then
+        # ❌ 触发熔断：刚才记录的所有文件其实都被删掉了，这不是下播，是用户在删目录
+        log warn "【安全熔断】本轮记录的 ${total_checked} 个历史活跃文件在硬盘上已全部不存！放弃执行备份脚本。"
+      else
+        # ✅ 自检通过：至少有一个视频文件还在，属于正常录制完毕
+        log info "自检通过（检测到有效录制产物）。直接开始执行备份脚本..."
+        
+        BACKUP_START_TS=$(date +%s)
+        /rec/脚本/录播上传备份脚本.sh >> "$LOG_FILE" 2>&1
+        BACKUP_ELAPSED=$(( $(date +%s) - BACKUP_START_TS ))
+        
+        log info "备份脚本执行完毕（耗时:${BACKUP_ELAPSED}s）"
+      fi
+
+      # 无论成功备份还是触发熔断，最终都重置会话，迎接下一次录制
       log_reset_session
-      log info 日志已重置
+      print_welcome_banner
+      
       LAST_STATUS=0
+      PREVIOUS_ACTIVE_FILES=""
+      HISTORY_ACTIVE_FILES=""
     fi
   fi
+
   sleep "$DEFAULT_SLEEP_TIME"
 done
 EOF
@@ -479,11 +530,19 @@ EOF
 chmod +x "$OPENCC_SCHEDULER_SCRIPT"
 "$OPENCC_SCHEDULER_SCRIPT" &
 
-# 输出账户信息
-log -f info "当前录播姬用户名:"
-log -f info "$Bililive_USER"
-log -f info "当前录播姬密码:"
-log -f info "$Bililive_PASS"
+# 输出账户信息（首次强制输出到终端，后续仅记录日志）
+if ! grep -q "CREDENTIALS_SHOWN" "$STATUS_FILE" 2>/dev/null; then
+    log -f info "当前录播姬用户名:"
+    log -f info "$Bililive_USER"
+    log -f info "当前录播姬密码:"
+    log -f info "$Bililive_PASS"
+    echo "CREDENTIALS_SHOWN=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
+else
+    log info "当前录播姬用户名:"
+    log info "$Bililive_USER"
+    log info "当前录播姬密码:"
+    log info "$Bililive_PASS"
+fi
 #echo "biliup默认用户名为："
 #echo "biliup"
 #echo "biliup密码需要登录web界面注册"
