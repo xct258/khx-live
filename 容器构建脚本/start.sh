@@ -306,13 +306,13 @@ PREVIOUS_ACTIVE_FILES=""      # 录制中用来比对新增文件的“当前活
 HISTORY_ACTIVE_FILES=""       # 【新增】用来做最终存在性检测的“全量历史累加池”
 declare -A MISSING_DIR_REPORTED
 
-DEFAULT_SLEEP_TIME="300"          # 循环时间（秒）
+DEFAULT_SLEEP_TIME="5"            # 循环时间（分钟）
 SCAN_FRESHNESS_MIN="20"         # find 直接查找的时间（分钟）
 
 print_welcome_banner() {
   log info "═══════════════════════════════════════════════"
   log info "  目录监控脚本已启动/重置"
-  log info "  检查间隔: ${DEFAULT_SLEEP_TIME}s"
+  log info "  检查间隔: ${DEFAULT_SLEEP_TIME}m"
   log info "  文件写入静默阈值: 直接使用 find 过滤 ${SCAN_FRESHNESS_MIN} 分钟"
   log info "  安全防护机制: 历史视频存在性文件级熔断自检"
   log info "═══════════════════════════════════════════════"
@@ -332,7 +332,7 @@ while true; do
 
   if [[ "$ENABLE_UPLOAD_SCRIPT" != "true" ]]; then
     log info "上传备份未启用(ENABLE_UPLOAD_SCRIPT=$ENABLE_UPLOAD_SCRIPT)，跳过检查"
-    sleep "$DEFAULT_SLEEP_TIME"
+    sleep "$((DEFAULT_SLEEP_TIME * 60))"
     continue
   fi
 
@@ -430,7 +430,7 @@ while true; do
     fi
   fi
 
-  sleep "$DEFAULT_SLEEP_TIME"
+  sleep "$((DEFAULT_SLEEP_TIME * 60))"
 done
 EOF
 
