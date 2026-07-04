@@ -32,6 +32,16 @@ def get_resource_path(relative_path):
 BASE_DIR = get_base_path()
 
 MODEL_NAME = "large-v3-turbo"
+CONFIG_PATH = "/rec/config.conf"
+if os.path.exists(CONFIG_PATH):
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("OPENCC_MODEL="):
+                v = line.split("=", 1)[1].strip().strip("'\""")
+                if v:
+                    MODEL_NAME = v
+                break
 MODEL_PATH = os.path.join(BASE_DIR, "models", MODEL_NAME)
 GPU_COMPUTE_TYPE = "float16"
 CPU_COMPUTE_TYPE = "int8"

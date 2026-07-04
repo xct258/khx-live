@@ -503,28 +503,66 @@ fi
 
 if [[ "$ENABLE_OPENCC" = "true" ]]; then
   # 检查是否已安装过
-if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
-  log info "检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
-  pip install \
-    opencc \
-    torch \
-    faster_whisper \
-  --break-system-packages > /dev/null 2>&1
+  if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
+    log info "检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
+    pip install \
+      opencc \
+      torch \
+      faster_whisper \
+    --break-system-packages > /dev/null 2>&1
 
-  if [ $? -eq 0 ]; then
-    echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
-    log info "【成功】语音识别依赖安装完毕！"
-  else
-    log warn "【错误】语音识别依赖安装失败！"
-    exit 1
+    if [ $? -eq 0 ]; then
+      echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
+      log info "【成功】语音识别依赖安装完毕！"
+    else
+      log warn "【错误】语音识别依赖安装失败！"
+      exit 1
+    fi
   fi
-fi
 
-# 启动服务
-if [[ -f "/rec/语音识别/app.py" ]]; then
-  log info "启动语音识别服务..."
-  python3 /rec/语音识别/app.py > /dev/null 2>&1 &
-fi
+  # 检查并自动下载模型
+  OPENCC_MODEL="${OPENCC_MODEL:-large-v3-turbo}"
+  MODEL_DIR="/rec/语音识别/models"
+  mkdir -p "$MODEL_DIR"
+  if [ ! -f "$MODEL_DIR/$OPENCC_MODEL/config.json" ]; then
+    log info "检测到模型文件不存在，正在下载模型 $OPENCC_MODEL（包体较大，请耐心等待）..."
+    HF_BASE="https://huggingface.co"
+    case "$OPENCC_MODEL" in
+      tiny)     REPO="Systran/faster-whisper-tiny" ;;
+      tiny.en)  REPO="Systran/faster-whisper-tiny.en" ;;
+      base)     REPO="Systran/faster-whisper-base" ;;
+      base.en)  REPO="Systran/faster-whisper-base.en" ;;
+      small)    REPO="Systran/faster-whisper-small" ;;
+      small.en) REPO="Systran/faster-whisper-small.en" ;;
+      medium)   REPO="Systran/faster-whisper-medium" ;;
+      medium.en) REPO="Systran/faster-whisper-medium.en" ;;
+      large-v2) REPO="Systran/faster-whisper-large-v2" ;;
+      large-v3) REPO="Systran/faster-whisper-large-v3" ;;
+      large-v3-turbo|turbo) REPO="Systran/faster-whisper-large-v3" ;;
+      *)        REPO="$OPENCC_MODEL" ;;
+    esac
+    mkdir -p "$MODEL_DIR/$OPENCC_MODEL"
+    cd "$MODEL_DIR/$OPENCC_MODEL"
+    wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/config.json"
+    wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/tokenizer.json"
+    wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/vocabulary.txt" || true
+    wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/model.bin"
+    if [ $? -eq 0 ] && [ -f config.json ] && [ -f model.bin ]; then
+      log info "【成功】模型 $OPENCC_MODEL 下载完毕！"
+    else
+      log warn "【错误】模型 $OPENCC_MODEL 下载失败，可尝试其他模型或手动下载放到 $MODEL_DIR/$OPENCC_MODEL/"
+    fi
+  fi
+
+  # 模型存在才启动服务
+  if [[ -f "$MODEL_DIR/$OPENCC_MODEL/config.json" ]]; then
+    if [[ -f "/rec/语音识别/app.py" ]]; then
+      log info "启动语音识别服务..."
+      python3 /rec/语音识别/app.py > /dev/null 2>&1 &
+    fi
+  else
+    log warn "模型文件不存在，语音识别服务未启动，请稍后检查模型是否下载成功"
+  fi
 fi
 EOF
 chmod +x "$OPENCC_SCHEDULER_SCRIPT"
