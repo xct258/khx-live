@@ -118,8 +118,8 @@ else
     log info "║  完整路径: ${dir}"
     log info "╚══════════════════════════════════════════╝"
 
-    # 先随便找一个文件提取元数据（用于确定缓存目录名）
-    first_file=$(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -print -quit 2>/dev/null)
+    # 取最早的文件提取元数据（用于确定缓存目录名）
+    first_file=$(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -printf '%T@ %p\n' | sort -n | head -1 | cut -d' ' -f2-)
     if [[ -z "$first_file" ]]; then
       log info "目录 ${dir} 中无视频文件，直接移除"
       rm -rf "$dir"
@@ -146,8 +146,7 @@ else
 
     TOTAL_FILES_MOVED=$((TOTAL_FILES_MOVED + moved_count))
     log info "移动完成 —— 共 ${moved_count} 个文件，视频总大小:$(format_size $moved_size)"
-    find "$dir" -type d -empty -delete 2>/dev/null
-    rmdir "$dir" 2>/dev/null || log warn "源目录 ${dir} 非空，跳过删除"
+    rmdir "$dir" 2>/dev/null || true
     cache_dirs+=("$cache_dir")
 
     # 记录处理前信息
