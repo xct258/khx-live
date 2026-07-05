@@ -290,11 +290,11 @@ else
       streamer_name="括弧笑bilibili"
     fi
 
-    log info "元数据 —— 直播标题: $stream_title"
-    log info "元数据 —— 录制平台: $recording_platform"
-    log info "元数据 —— 主播名称: $streamer_name"
-    log info "元数据 —— 开播时间: $start_time"
-    log info "元数据 —— 上传标题: ${formatted_start_time_4} [${stream_title}]"
+    log info "直播标题: $stream_title"
+    log info "录制平台: $recording_platform"
+    log info "主播名称: $streamer_name"
+    log info "开播时间: $start_time"
+    log info "上传标题: ${formatted_start_time_4} [${stream_title}]"
 
     for video_file in "${input_files[@]}"; do
       if [[ -f "$video_file" ]]; then
