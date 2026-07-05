@@ -1,6 +1,8 @@
 #!/bin/bash
 # 单次执行：从 GitHub 更新 B站 cookie 并同步到录播姬配置
 
+source /root/.credentials
+
 REPO="xct258/Documentation"
 BRANCH="main"
 SYNC_SCRIPT="/rec/脚本/更新录播姬配置文件.py"

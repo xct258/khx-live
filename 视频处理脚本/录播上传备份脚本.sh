@@ -700,9 +700,6 @@ else
   log info "已禁用自动清理，跳过清理"
 fi
 
-# 自动更新cookies
-/rec/脚本/自动更新cookie.sh
-
 # ===================== 执行汇总 =====================
 SCRIPT_ELAPSED=$(( $(date +%s) - SCRIPT_START_TS ))
 log info "═══════════════════════════════════════════════"
