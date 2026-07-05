@@ -564,6 +564,51 @@ EOF
 chmod +x "$OPENCC_SCHEDULER_SCRIPT"
 "$OPENCC_SCHEDULER_SCRIPT" &
 
+# 创建每日 cookie 更新调度器（凌晨3点触发，有录制则每小时重试）
+COOKIE_SCHEDULER_SCRIPT="/usr/local/bin/cookie每日更新.sh"
+cat << 'EOF' > "$COOKIE_SCHEDULER_SCRIPT"
+#!/bin/bash
+source "/rec/脚本/log.sh"
+LOG_BASE_DIR="/rec/logs"
+SCAN_FRESHNESS_MIN=20
+
+is_recording() {
+  source /rec/config.conf
+  for folder in "${source_folders[@]}"; do
+    if [[ -d "$folder" ]] && [[ -n "$(find "$folder" -type f -mmin -$SCAN_FRESHNESS_MIN -print -quit 2>/dev/null)" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+sleep_until_3am() {
+  local now target
+  now=$(date +%s)
+  target=$(date -d "today 03:00" +%s 2>/dev/null)
+  if (( now >= target )); then
+    target=$(date -d "tomorrow 03:00" +%s 2>/dev/null)
+  fi
+  sleep "$(( target - now ))"
+}
+
+while true; do
+  sleep_until_3am
+  while true; do
+    if is_recording; then
+      log info "录制中，cookie 更新延后1小时..."
+      sleep 3600
+    else
+      log info "未检测到录制，更新 cookies..."
+      /rec/脚本/自动更新cookie.sh
+      break
+    fi
+  done
+done
+EOF
+chmod +x "$COOKIE_SCHEDULER_SCRIPT"
+"$COOKIE_SCHEDULER_SCRIPT" &
+
 # 输出账户信息（首次强制输出到终端，后续仅记录日志）
 if ! grep -q "CREDENTIALS_SHOWN" "$STATUS_FILE" 2>/dev/null; then
     log -f info "当前录播姬用户名:"
