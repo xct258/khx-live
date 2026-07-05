@@ -12,6 +12,7 @@ import hashlib
 from datetime import datetime
 from uuid import uuid4
 from pathlib import Path
+from urllib.parse import quote
 from typing import List, Optional
 from collections import deque
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Body, Form, File, UploadFile # pyright: ignore[reportMissingImports]
@@ -39,7 +40,6 @@ COVER_DIR = OUTPUT_DIR / "covers"  # store uploaded cover images separately (now
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"
-AUDIO_M4A_CACHE_DIR = BASE_DIR / "audio_m4a_cache"
 WAVEFORM_CACHE_DIR = BASE_DIR / "waveform_cache"
 ALLOWED_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 
@@ -49,13 +49,12 @@ CACHE_CLEANUP_RULES = [
     (COVER_DIR, 24 * 60 * 60),
     (THUMB_CACHE_DIR, 7 * 24 * 60 * 60),
     (WAVEFORM_CACHE_DIR, 14 * 24 * 60 * 60),
-    (AUDIO_M4A_CACHE_DIR, 30 * 24 * 60 * 60),
 ]
 
 # 脚本内测试模式开关：设为 True 则上传进入测试模式（只返回命令预览），False正常上传
 UPLOAD_TEST_MODE = True
 
-for d in [VIDEO_DIR, TMP_OUTPUT_DIR, OUTPUT_DIR, FINISHED_DIR, COVER_DIR, TEMPLATE_DIR, STATIC_DIR, THUMB_CACHE_DIR, AUDIO_M4A_CACHE_DIR, WAVEFORM_CACHE_DIR]:
+for d in [VIDEO_DIR, TMP_OUTPUT_DIR, OUTPUT_DIR, FINISHED_DIR, COVER_DIR, TEMPLATE_DIR, STATIC_DIR, THUMB_CACHE_DIR, WAVEFORM_CACHE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 MERGE_STATE_PATH = BASE_DIR / "merge_state.json"
@@ -1536,79 +1535,7 @@ async def get_subtitle(name: str, fmt: str = "list"):
 
 # ------------------ 音频（原文件） ------------------
 
-AUDIO_EXTS = {".aac", ".mp3", ".wav", ".flac", ".m4a", ".ogg", ".wma"}
-# 浏览器原生支持快速 seek（有全局索引或字节↔时间近似线性）的格式
-AUDIO_SEEKABLE_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".wma"}
-
-_audio_convert_locks: dict[str, threading.Lock] = {}
-_audio_convert_locks_guard = threading.Lock()
-
-
-def _get_audio_convert_lock(key: str) -> threading.Lock:
-    with _audio_convert_locks_guard:
-        lock = _audio_convert_locks.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _audio_convert_locks[key] = lock
-        return lock
-
-
-def _m4a_cache_path_for(src_path: Path) -> Path:
-    try:
-        st = src_path.stat()
-    except FileNotFoundError:
-        st = None
-    safe_name = re.sub(r"[^\w.-]+", "_", src_path.name)
-    sig = f"{src_path.resolve()}|{st.st_size if st else 0}|{int(st.st_mtime) if st else 0}"
-    digest = hashlib.md5(sig.encode("utf-8")).hexdigest()[:16]
-    return AUDIO_M4A_CACHE_DIR / f"{safe_name}__{digest}.m4a"
-
-
-def _ensure_seekable_audio(src_path_str: str) -> str:
-    """对没有全局索引的 raw ADTS AAC 做容器重封装到 m4a (-c copy + faststart)。
-    返回可被浏览器秒级 seek 的文件路径。已是可 seek 格式则原样返回。"""
-    src = Path(src_path_str)
-    ext = src.suffix.lower()
-    if ext in AUDIO_SEEKABLE_EXTS:
-        return src_path_str
-    if ext != ".aac":
-        return src_path_str
-    if not ffmpeg_exists():
-        return src_path_str
-    cache_path = _m4a_cache_path_for(src)
-    if cache_path.exists() and cache_path.stat().st_size > 0:
-        return str(cache_path)
-    lock = _get_audio_convert_lock(str(cache_path))
-    with lock:
-        if cache_path.exists() and cache_path.stat().st_size > 0:
-            return str(cache_path)
-        tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-        try:
-            cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                "-i", str(src),
-                "-c", "copy",
-                "-bsf:a", "aac_adtstoasc",
-                "-movflags", "+faststart",
-                "-f", "mp4",
-                str(tmp_path),
-            ]
-            proc = subprocess.run(cmd, capture_output=True, timeout=120)
-            if proc.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                return src_path_str
-            tmp_path.replace(cache_path)
-        except Exception:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            return src_path_str
-    return str(cache_path) if cache_path.exists() else src_path_str
-
+AUDIO_EXTS = {".m4a"}
 
 def _find_audio_file(video_name: str) -> Optional[str]:
     try:
@@ -1664,7 +1591,6 @@ async def stream_audio(name: str, request: Request):
     audio_path_str = _find_audio_file(name)
     if not audio_path_str:
         raise HTTPException(404, "Audio not found")
-    audio_path_str = await asyncio.to_thread(_ensure_seekable_audio, audio_path_str)
     path = Path(audio_path_str)
     file_size = path.stat().st_size
     headers = {}
@@ -1808,7 +1734,7 @@ async def thumb_manifest(
         ok = await asyncio.to_thread(_ensure_thumb_file, path, file_path, t, width, height, quality)
         if not ok:
             continue
-        thumbs.append({"time": t, "url": f"/thumb-cache/{bucket}/{file_name}"})
+        thumbs.append({"time": t, "url": quote(f"/thumb-cache/{bucket}/{file_name}")})
 
     return {
         "thumbs": thumbs,
@@ -1869,7 +1795,7 @@ async def thumb_manifest_stream(
                 "type": "thumb",
                 "index": i,
                 "time": t,
-                "url": f"/thumb-cache/{bucket}/{file_name}",
+                "url": quote(f"/thumb-cache/{bucket}/{file_name}"),
             }
             yield json.dumps(item, ensure_ascii=False) + "\n"
 
@@ -2149,6 +2075,8 @@ async def slice_merge_all(body: MultiVideoRequest = Body(...), bg: BackgroundTas
     safe_user = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", username).strip(" .")
     if not safe_user:
         safe_user = "user"
+    if safe_user.lower() == "covers":
+        raise HTTPException(400, "用户名不能为 covers")
 
     if not ffmpeg_exists():
         raise HTTPException(500, "ffmpeg not found in PATH")
@@ -3103,6 +3031,7 @@ async def index(request: Request):
         "request": request,
         "stats": stats,
         "script_v": _v(STATIC_DIR / "script.js"),
+        "bg_switcher_v": _v(STATIC_DIR / "background-switcher.js"),
         "style_v": _v(STATIC_DIR / "style.css"),
     }
     return templates.TemplateResponse(request, "index.html", ctx)

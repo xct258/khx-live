@@ -7,14 +7,12 @@
     <title>视频合并</title>
     <link rel="stylesheet" href="/static/style.css?v={{ style_v }}">
     <link rel="icon" href="/static/favicon.ico">
+    <script src="/static/background-switcher.js?v={{ bg_switcher_v }}" data-api="https://random-image.xct258.top/"></script>
 
     <!-- 内联默认强调色 -->
 </head>
 
 <body>
-
-    <!-- 加载层 -->
-    <div id="loadingOverlay" class="loading-overlay">加载中...</div>
 
     <!-- 网站说明（全屏弹窗，启动后 2 秒显示；加载内容可在后台继续） -->
     <div id="siteIntroOverlay" class="site-intro-overlay" role="dialog" aria-modal="true" aria-hidden="true">
@@ -24,117 +22,222 @@
                 <button id="siteIntroCloseX" class="modal-btn" type="button" aria-label="关闭">×</button>
             </div>
             <div class="site-intro-body selectable">
-                <div style="opacity:0.9; font-size:13px; line-height:1.6;">
+                <div style="opacity:0.9; font-size:13px; line-height:1.7;">
 
-                    <!-- 1. 工具简介 -->
+                    <!-- ==================== 1. 工具简介 ==================== -->
                     <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📌 工具简介</div>
                     <div style="margin:0 0 14px 10px;">
-                        本工具用于从括弧笑直播回放中选择片段、预览顺序并合并成一个成品视频。当前支持视频时间轴切片、字幕切片、跨视频片段合并、片段导入导出、历史输出管理和 B 站投稿。
+                        <p style="margin:0 0 6px 0;">本工具用于从<strong>括弧笑直播回放</strong>中选取片段、预览顺序并合并为一个成品视频。核心功能包括：</p>
+                        <ul style="margin:0 0 0 14px; padding:0;">
+                            <li><strong>时间轴切片</strong>：通过视频播放器+时间轴工具精确定位起点终点，支持帧精确切片。</li>
+                            <li><strong>字幕切片</strong>：基于 srt/txt/vtt/ass 字幕文件快速选取时间段。</li>
+                            <li><strong>跨视频合并</strong>：可从多个不同视频中分别选取片段，按自定义顺序合并。</li>
+                            <li><strong>片段预览</strong>：服务端实时切片，100% 保证与最终成品一致（帧精确）。</li>
+                            <li><strong>片段导入导出</strong>：支持导出为 JSON 备份，也支持从成品视频元数据中恢复。</li>
+                            <li><strong>历史输出管理</strong>：记录所有合并成功的视频，支持下载、复制链接、删除。</li>
+                            <li><strong>B 站投稿</strong>：通过 biliup 工具一键上传到 B 站（含封面、标签、简介）。</li>
+                        </ul>
                     </div>
 
-                    <!-- 2. 推荐流程 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🚀 推荐流程</div>
-                    <ol style="margin:0 0 14px 18px; padding:0;">
-                        <li><strong>选择视频</strong>：点击“选择视频”，在目录树中进入文件夹并选择需要切片的预览视频。</li>
-                        <li><strong>选择切片方式</strong>：勾选“启用视频预览”使用时间轴切片；有字幕时可勾选“使用字幕切片”。</li>
-                        <li><strong>添加片段</strong>：用时间轴按钮或快捷键设置起点/终点，也可以在字幕列表中点“+”添加字幕片段。</li>
-                        <li><strong>检查列表</strong>：打开“待合并片段”，预览全部、调整顺序、删除或导出备份。</li>
-                        <li><strong>提交合并</strong>：填写用户名称和可选文件名，选择“原版”或“压制版”，点击“开始合并”。</li>
+                    <!-- ==================== 2. 推荐流程 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🚀 推荐流程（新手速览）</div>
+                    <ol style="margin:0 0 14px 18px; padding:0; line-height:1.8;">
+                        <li><strong>选择视频</strong>：点击"选择视频"按钮，在弹出的目录树中浏览文件夹，点击视频文件确认选择。</li>
+                        <li><strong>选择切片方式</strong>：根据需要勾选"启用视频预览"（时间轴精确定位）和/或"使用字幕切片"（基于字幕快速选取）。</li>
+                        <li><strong>添加片段</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li>时间轴方式：播放到需要的位置按 <code>Q</code> 设起点、<code>W</code> 设终点自动添加。</li>
+                                <li>字幕方式：在字幕列表中点击 <code>+</code> 将该字幕时间段加入列表。</li>
+                                <li>手动方式：在"片段工坊"直接输入时:分:秒格式的起止时间，点"确认添加片段"。</li>
+                            </ul>
+                        </li>
+                        <li><strong>检查与调整</strong>：打开"待合并片段"，预览全部片段顺序，拖拽排序、删除不需要的片段。</li>
+                        <li><strong>提交合并</strong>：填写用户名（必填）和文件名（可选），选择"原版"或"压制版"源，点击"开始合并"。</li>
                     </ol>
 
-                    <!-- 3. 视频选择与配置 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🎬 视频选择与配置</div>
+                    <!-- ==================== 3. 视频选择与目录树 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🎬 视频选择与目录树</div>
                     <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>目录树</strong>：只展示可用于预览的录播视频；进入文件夹后可以返回上级目录。</li>
-                        <li><strong>启用视频预览</strong>：加载主播放器和时间轴，适合精确找点，但会消耗流量。</li>
-                        <li><strong>使用字幕切片</strong>：当前视频存在字幕时可用；关闭视频预览也能通过音频预览字幕片段。</li>
-                        <li><strong>源版本</strong>：合并时“原版”使用无压制源文件，“压制版”使用带压制效果的投稿版源文件。</li>
+                        <li><strong>打开方式</strong>：页面顶部"选择视频"按钮，或播放器控制栏右侧的"选择视频"按钮均可打开目录树弹窗。</li>
+                        <li><strong>目录结构</strong>：目录树基于 <code>/rec/videos/括弧笑bilibili/压制版/</code> 目录，按日期和直播场次组织。只展示包含<strong>预览版视频</strong>（文件名以 <code>预览版-</code> 开头）的目录。</li>
+                        <li><strong>导航操作</strong>：点击文件夹展开下级（懒加载），顶部的"← 返回"按钮可回到上级目录。路径栏显示当前位置。</li>
+                        <li><strong>选择确认</strong>：点击视频文件名即完成选择，弹窗自动关闭，播放器区域加载视频。</li>
+                        <li><strong>源版本说明</strong>：合并时"原版"使用 <code>括弧笑bilibili/原文件/</code> 目录中的无压制源文件；"压制版"使用 <code>括弧笑bilibili/压制版/</code> 目录中的带弹幕压制文件。</li>
                     </ul>
 
-                    <!-- 4. 时间轴切片 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📐 时间轴切片</div>
+                    <!-- ==================== 4. 时间轴切片 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📐 时间轴切片（视频预览模式）</div>
                     <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>加载预览</strong>：选择视频后点击预览区的“预览”，等待播放器可播放后再使用快捷键。</li>
-                        <li><strong>设置片段</strong>：点击 <code>Start [Q]</code> 设置起点，点击 <code>End [W]</code> 设置终点；起点和终点都存在时会自动添加片段。</li>
-                        <li><strong>手动输入</strong>：也可以在“片段工坊”中直接输入起点和终点，再点“确认添加片段”。</li>
-                        <li><strong>时间轴工具</strong>：支持全图/多倍率缩放、跟随播放、缩略图、音频波形、删除所选片段。</li>
-                        <li><strong>片段预览</strong>：选中时间轴片段后点 <code>▶Play</code>，或使用“预览全部”检查最终顺序。</li>
+                        <li><strong>启用条件</strong>：勾选"启用视频预览"复选框，选择视频后点击预览区域中的"预览"按钮，等待视频加载完成。</li>
+                        <li><strong>播放控制</strong>：播放/暂停（空格）、后退5秒、前进5秒按钮；进度条支持拖拽和点击跳转，悬停时显示时间戳工具提示。</li>
+                        <li><strong>倍速播放</strong>：支持 0.5x、1.0x、1.25x、1.5x 倍速，通过播放器右上角下拉菜单切换。</li>
+                        <li><strong>设置切片点</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li>按 <code>Q</code> 键将当前位置设为起点（时间轴出现绿色标记和半透明区域）。</li>
+                                <li>按 <code>W</code> 键将当前位置设为终点（时间轴出现红色标记）。</li>
+                                <li>起点和终点同时存在时自动添加片段到列表；也支持先设完再按 <code>C</code> 或 <code>Enter</code> 手动添加。</li>
+                            </ul>
+                        </li>
+                        <li><strong>时间轴工具</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li><strong>缩放</strong>：支持全图显示和一倍/二倍/四倍视图缩放，方便精细调整。</li>
+                                <li><strong>跟随播放</strong>：开启后时间轴自动随播放进度滚动。</li>
+                                <li><strong>缩略图预览</strong>：时间轴上方显示缩略图（默认每 30 秒一张），帮助定位画面内容。</li>
+                                <li><strong>音频波形</strong>：时间轴下方显示音频波形图，方便根据声音波形特征定位。</li>
+                                <li><strong>片段显示</strong>：已添加的片段在时间轴上以彩色高亮条显示。点击片段可选中，按 <code>Delete</code> 键删除。</li>
+                                <li><strong>预览选中片段</strong>：单击选中某已添加片段后按 <code>P</code> 键，服务端实时切片并以弹窗播放，效果与成品完全一致（帧精确）。</li>
+                            </ul>
+                        </li>
+                        <li><strong>手动添加</strong>：在"片段工坊"区域直接输入起点和终点时间（格式 <code>HH:MM:SS</code> 或 <code>HH:MM:SS.mmm</code>），点击"确认添加片段"。</li>
                     </ul>
 
-                    <!-- 5. 字幕切片 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📝 字幕切片</div>
+                    <!-- ==================== 5. 字幕切片模式 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📝 字幕切片模式</div>
                     <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>字幕列表</strong>：选择视频后若找到字幕文件，勾选“使用字幕切片”即可显示字幕列表。</li>
-                        <li><strong>播放/定位</strong>：点击字幕可跳转位置；点 <code>▶</code> 可播放该字幕对应的视频或音频片段。</li>
-                        <li><strong>添加/移除</strong>：点 <code>+</code> 将字幕时间段加入待合并片段；已加入或重叠时会显示为可移除状态。</li>
-                        <li><strong>编辑字幕</strong>：可编辑字幕起止时间和文本，保存后会写回字幕文件并记录变更。</li>
+                        <li><strong>启用条件</strong>：服务端自动在同目录的原文件目录下查找同名的 <code>.srt</code> / <code>.txt</code> / <code>.vtt</code> / <code>.ass</code> 字幕文件。找到后勾选"使用字幕切片"显示字幕列表。</li>
+                        <li><strong>字幕列表</strong>：按时间顺序排列所有字幕条目，每条显示时间范围和文本内容。条目较多时分页显示，支持翻页和页码跳转。</li>
+                        <li><strong>定位播放</strong>：点击任意字幕条目可跳转播放器到对应时间点；点击 <code>▶</code> 按钮可播放对应视频/音频片段。</li>
+                        <li><strong>添加字幕片段</strong>：点击字幕条目上的 <code>+</code> 按钮，将该字幕的起止时间作为一个片段添加到待合并列表。已添加或重叠时会显示为可移除状态。</li>
+                        <li><strong>字幕编辑</strong>：选中条目后点击"编辑"，可修改起止时间和文本。保存后写回原始字幕文件并自动备份（生成 <code>_原始备份</code> 后缀文件）。</li>
+                        <li><strong>删除条目</strong>：编辑模式下点击"删除"从字幕文件中移除该条目。</li>
+                        <li><strong>变更记录</strong>：每次保存后在字幕文件同目录下生成 <code>_字幕变更记录.txt</code>，记录操作时间、操作人、修改内容。</li>
+                        <li><strong>撤回功能</strong>：保存后如有误，可点击"撤回"回退到上一个备份版本。</li>
                     </ul>
 
-                    <!-- 6. 快捷键 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⌨️ 常用快捷键</div>
-                    <div style="margin:0 0 4px 10px; font-size:11px; opacity:0.7;">
-                        快捷键仅在视频预览已加载、焦点不在输入框/按钮时生效。
+                    <!-- ==================== 6. 片段工坊 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🔧 片段工坊</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>当前视频信息</strong>：显示当前正在编辑的视频文件名，方便跨视频切片时区分。</li>
+                        <li><strong>手动时间输入</strong>：在"起点"和"终点"输入框中输入时间值，格式 <code>HH:MM:SS</code> 或 <code>HH:MM:SS.mmm</code>（如 <code>01:23:45</code> 或 <code>01:23:45.678</code>）。</li>
+                        <li><strong>确认添加</strong>：点击"确认添加片段"按钮，将当前输入的时间段作为一个片段加入待合并列表。</li>
+                        <li><strong>待合并片段入口</strong>：点击"待合并片段 (N)"按钮（N 为当前片段总数），打开完整片段列表弹窗。</li>
+                    </ul>
+
+                    <!-- ==================== 7. 片段列表管理 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📋 片段列表管理</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>弹窗布局</strong>：顶部显示标题和"清空"按钮（带二次确认），中部为片段列表，底部为操作按钮。</li>
+                        <li><strong>片段卡片</strong>：每个片段显示序号、视频文件名、起止时间、时长。同一视频的片段用相同颜色区分。</li>
+                        <li><strong>拖拽排序</strong>：拖动卡片右侧手柄调整顺序，最终合并按此顺序执行。正在切片/合并时拖拽被禁用。</li>
+                        <li><strong>单个删除</strong>：点击片段卡片上的 <code>×</code> 按钮删除该片段。</li>
+                        <li><strong>勾选删除</strong>：勾选多个片段左侧的复选框，点击"勾选删除"批量移除。</li>
+                        <li><strong>全屏预览</strong>：点击"预览全部"按待合并顺序连续播放所有片段。当前播放的片段高亮显示。支持播放/暂停、进度条拖拽。</li>
+                        <li><strong>自动保存</strong>：片段列表和用户名自动保存在浏览器 localStorage 中。刷新页面时会弹窗提示是否恢复。</li>
+                    </ul>
+
+                    <!-- ==================== 8. 导入与导出 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📦 导入与导出</div>
+                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
+                        <li><strong>导出为文件</strong>：点击"导出"按钮，将当前全部片段信息保存为 <code>clips_日期时间.json</code> 文件。适合备份或在不同设备间转移。</li>
+                        <li><strong>从文件导入</strong>：点击"导入"→ 选择"从导出的文件导入"，选择之前导出的 <code>.json</code> 文件恢复片段列表。<strong>注意：导入会替换当前所有片段</strong>，如有现有片段会先弹窗确认。</li>
+                        <li><strong>从成品视频元数据导入</strong>：点击"导入"→ 选择"从成品视频元数据导入"，粘贴成品视频的元数据 JSON。获取方式：<code>ffprobe -v error -show_entries format_tags=comment -of default=noprint_wrappers=1:nokey=1 文件.mp4</code>，或从 <code>.meta.json</code> 侧边文件复制。</li>
+                    </ul>
+
+                    <!-- ==================== 9. 快捷键大全 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⌨️ 快捷键大全</div>
+                    <div style="margin:0 0 4px 10px; font-size:11px; opacity:0.75;">
+                        快捷键仅在视频预览已加载、且焦点不在输入框/按钮/文本区域上时生效。
                     </div>
-                    <div style="margin:0 0 14px 10px;">
-                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px; font-size:12px;">
-                            <code>Q</code><span>设置起点；如果已有终点则自动添加片段</span>
-                            <code>W</code><span>设置终点；如果已有起点则自动添加片段</span>
-                            <code>C / Enter</code><span>按当前起点和终点手动添加片段</span>
-                            <code>P</code><span>预览时间轴中选中的片段</span>
-                            <code>D / J</code><span>跳到起点/终点并播放；按住 <code>Shift</code> 时只跳转不播放</span>
-                            <code>[</code><span>回到当前起点但不播放</span>
-                            <code>← / →</code><span>后退/前进 1 秒</span>
-                            <code>空格</code><span>播放 / 暂停</span>
+                    <div style="margin:0 0 14px 10px; font-size:12px;">
+                        <div style="display:grid; grid-template-columns: auto 1fr; gap:3px 12px;">
+
+                            <div style="grid-column:1/-1; font-weight:700; margin-top:4px; color:var(--accent-color);">◆ 切片操作</div>
+                            <code>Q</code><span>将当前位置设为起点。</span>
+                            <code>W</code><span>将当前位置设为终点。起点和终点都存在时自动添加片段。</span>
+                            <code>C / Enter</code><span>按当前起点和终点手动添加片段。</span>
+                            <code>F</code><span>跳转到起点位置。按住 <code>Shift</code> 则跳转后播放。</span>
+                            <code>J</code><span>跳转到终点位置。按住 <code>Shift</code> 则跳转后播放。</span>
+
+                            <div style="grid-column:1/-1; font-weight:700; margin-top:4px; color:var(--accent-color);">◆ 播放控制</div>
+                            <code>Space</code><span>播放 / 暂停切换。</span>
+                            <code>←</code><span>后退 1 秒。</span>
+                            <code>→</code><span>前进 1 秒。</span>
+
+                            <div style="grid-column:1/-1; font-weight:700; margin-top:4px; color:var(--accent-color);">◆ 片段操作</div>
+                            <code>P</code><span>预览时间轴上当前选中的已添加片段。</span>
+                            <code>D</code><span>删除时间轴上选中的片段。按住 <code>Shift</code> 则保留起点标记。</span>
+
                         </div>
                     </div>
 
-                    <!-- 7. 片段列表 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📋 片段列表管理</div>
-                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>待合并片段</strong>：显示所有视频的片段，支持删除单个片段和拖拽排序。</li>
-                        <li><strong>跨视频合并</strong>：可以添加来自不同视频的片段，合并时会按列表顺序处理。</li>
-                        <li><strong>预览全部</strong>：按待合并顺序连续播放；未启用视频预览时会尽量使用音频预览。</li>
-                        <li><strong>自动保存</strong>：片段列表和用户名会保存在当前浏览器中，刷新后会提示是否恢复。</li>
-                        <li><strong>清空</strong>：会删除当前浏览器中的待合并片段，操作前会二次确认。</li>
-                    </ul>
-
-                    <!-- 8. 导入与导出 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📦 导入与导出</div>
-                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>导出</strong>：将当前待合并片段保存为 <code>clips_*.json</code>，适合备份或转移到其他浏览器。</li>
-                        <li><strong>从文件导入</strong>：点击“导入”后选择“从导出的文件导入”，再选择之前导出的 JSON 文件。</li>
-                        <li><strong>从元数据导入</strong>：选择“从成品视频元数据导入”，粘贴成品视频中的 <code>comment</code> 元数据或 ffprobe 输出。</li>
-                        <li><strong>替换规则</strong>：导入会替换当前片段列表；如果当前已有片段，会先弹窗确认。</li>
-                    </ul>
-
-                    <!-- 9. 合并任务 -->
+                    <!-- ==================== 10. 合并任务 ==================== -->
                     <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">🔨 合并任务</div>
                     <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>时长限制</strong>：单次最终合并总时长不能超过 90 分钟。</li>
-                        <li><strong>命名规则</strong>：输出文件会使用“用户名称-文件名称-时间戳”的格式；文件名称可留空。</li>
-                        <li><strong>任务队列</strong>：服务端同一时间只处理一个合并任务，其他任务会排队等待。</li>
-                        <li><strong>进度弹窗</strong>：显示当前阶段、全部片段进度、预计剩余时间和取消按钮。</li>
-                        <li><strong>完成后处理</strong>：合并完成后可下载、复制链接，并选择清空或保留当前片段列表。</li>
+                        <li><strong>前提条件</strong>：待合并片段中至少有一个片段；用户名不能为空。</li>
+                        <li><strong>总时长限制</strong>：所有片段时长之和不得超过 90 分钟（5400 秒），提交时会校验。</li>
+                        <li><strong>命名规则</strong>：输出文件格式为 <code>用户名称-文件名称-时间戳.mp4</code>，存放在 <code>/rec/videos/切片成品/用户名称/</code> 下。"文件名称"可选填，留空默认为 <code>merged</code>。支持实时预览文件名。</li>
+                        <li><strong>源版本选择</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li><strong>压制版</strong>：从 <code>压制版</code> 目录中选取有弹幕渲染的视频作为源。</li>
+                                <li><strong>原版</strong>：从 <code>原文件</code> 目录中选取无压制视频作为源。</li>
+                            </ul>
+                        </li>
+                        <li><strong>任务队列</strong>：服务端同时只执行一个合并任务。新提交的任务自动进入队列排队。进度弹窗会显示当前任务进度和自己在队列中的位置。</li>
+                        <li><strong>进度跟踪</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li><strong>切片阶段</strong>：逐个处理每个片段，显示"第 N/总 个片段"、片段内进度百分比、已处理时长/总时长、ffmpeg 实时速度/码率/帧率。</li>
+                                <li><strong>合并阶段</strong>：将所有切片后的片段合并为一个文件，显示合并进度百分比。</li>
+                                <li><strong>预计剩余时间</strong>：基于已处理速率估算剩余时间。</li>
+                            </ul>
+                        </li>
+                        <li><strong>取消任务</strong>：进度弹窗中的"取消当前任务"按钮可中断正在执行或排队的任务。取消后已生成的临时文件会自动清理。只能取消自己发起的任务（基于 token 校验）。</li>
+                        <li><strong>完成处理</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li>成功：弹窗显示"合并完成"，提供"下载"、"复制链接"按钮，询问是否清空当前片段列表。</li>
+                                <li>失败：显示错误信息（ffmpeg 日志尾部），可复制错误内容。</li>
+                                <li>取消：显示已取消，片段列表保留，可重新提交。</li>
+                            </ul>
+                        </li>
+                        <li><strong>元数据</strong>：成品视频会写入 <code>comment</code> 标签，包含所有片段来源信息（schema、视频名、起止帧号、源文件、帧率、精确时长等）。同时同目录下生成 <code>.meta.json</code> 侧边文件。</li>
                     </ul>
 
-                    <!-- 10. 历史输出与投稿 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📺 历史输出与投稿</div>
-                    <ul style="margin:0 0 14px 18px; padding:0; font-size:12px;">
-                        <li><strong>历史输出</strong>：合并成功后会记录到本机浏览器，可在“历史输出”中下载、复制链接或删除记录。</li>
-                        <li><strong>文件存在检查</strong>：如果服务器上的成品文件已被删除，下载和复制按钮会自动禁用或提示失败。</li>
-                        <li><strong>B 站投稿</strong>：历史输出中可打开投稿弹窗，填写标题、简介、封面和标签后提交。</li>
-                        <li><strong>上传进度</strong>：投稿过程中会显示百分比、速度、剩余时间和日志，也可以停止当前投稿。</li>
+                    <!-- ==================== 11. 历史输出与 B 站投稿 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📺 历史输出与 B 站投稿</div>
+                    <ul style="margin:0 0 10px 18px; padding:0; font-size:12px;">
+                        <li><strong>历史记录</strong>：每次合并成功后自动存入浏览器 localStorage。点击"历史输出"查看所有记录，每条包含文件名、用户名、创建时间、文件大小。</li>
+                        <li><strong>操作按钮</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li><strong>下载</strong>：直接下载成品视频文件。文件已被删除时按钮自动禁用。</li>
+                                <li><strong>复制链接</strong>：复制可直接下载的 URL 到剪贴板。</li>
+                                <li><strong>删除记录</strong>：从服务器删除成品文件并移除记录。</li>
+                                <li><strong>投稿到 B 站</strong>：打开投稿弹窗。</li>
+                            </ul>
+                        </li>
+                        <li><strong>投稿弹窗字段</strong>：
+                            <ul style="margin:2px 0 0 14px; padding:0;">
+                                <li><strong>视频标题</strong>（必填）：B 站视频标题。</li>
+                                <li><strong>视频简介</strong>（可选）：B 站视频简介。</li>
+                                <li><strong>视频封面</strong>（可选）：上传封面图片（最大 5MB），选中后显示文件名，可移除重新选择。</li>
+                                <li><strong>视频标签</strong>（必填，至少 1 个）：输入后按回车/空格/逗号添加，最多 10 个。点击标签上的 × 可移除。</li>
+                            </ul>
+                        </li>
+                        <li><strong>上传进度</strong>：投稿提交后弹窗显示实时进度（百分比、上传速度、剩余时间、日志输出）。支持"停止投稿"取消当前上传。</li>
+                        <li><strong>投稿状态</strong>：上传完成后显示"成功"或"失败"及详细信息。服务重启时未完成的上传自动标记为中断。</li>
+                        <li><strong>测试模式</strong>：当前服务运行在测试模式下，投稿不会真实上传，仅返回命令预览。</li>
                     </ul>
 
-                    <!-- 11. 注意事项 -->
-                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⚠️ 注意事项</div>
+                    <!-- ==================== 12. 辅助功能 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">📊 辅助功能</div>
+                    <ul style="margin:0 0 10px 18px; padding:0; font-size:12px;">
+                        <li><strong>缩略图</strong>：时间轴上方自动加载视频关键帧缩略图（默认每 30 秒一张），方便通过画面内容定位。</li>
+                        <li><strong>音频波形</strong>：时间轴下方自动生成音频波形图。基于原文件目录下的 .m4a 音频文件，通过 ffmpeg 提取峰值振幅生成。支持缩放联动。</li>
+                        <li><strong>全屏模式</strong>：点击播放器右上角的 <code>⛶</code> 按钮进入全屏模式。</li>
+                        <li><strong>站点统计</strong>：页面底部显示访问次数、合并成功次数、下载次数。</li>
+                    </ul>
+
+                    <!-- ==================== 13. 重要注意事项 ==================== -->
+                    <div style="font-weight:800; margin-bottom:6px; font-size:14px; color:var(--accent-color);">⚠️ 重要注意事项</div>
                     <ul style="margin:0 0 8px 18px; padding:0; font-size:12px;">
-                        <li>同一视频内的片段不能互相重叠；相邻片段可以首尾相接。</li>
-                        <li>正在切片、合并或排队时，片段添加、删除、排序等编辑操作会受到限制。</li>
-                        <li>视频预览、缩略图和波形都会产生额外请求，网络较慢时建议减少同时开启的辅助功能。</li>
-                        <li>自动保存、历史输出和“不再提示”只保存在当前浏览器；换设备或清理浏览器数据后不会保留。</li>
-                        <li>成品视频会写入切片元数据，后续可通过“导入 → 从成品视频元数据导入”恢复片段列表。</li>
-                        <li>工具仍在持续迭代，如遇到异常，请保留错误提示、视频名和操作步骤方便排查。</li>
+                        <li><strong>片段重叠限制</strong>：同一视频内的片段不能互相重叠（时间轴上有交叉检查），但相邻片段可以首尾相接。</li>
+                        <li><strong>操作限制</strong>：正在切片、合并或排队时，片段添加、删除、排序等编辑操作会被禁用。</li>
+                        <li><strong>网络要求</strong>：视频预览、缩略图和波形加载都需要从服务器拉取数据。网络较慢时建议关闭视频预览，仅使用字幕切片或手动输入时间。</li>
+                        <li><strong>本地存储</strong>：自动保存、历史输出和"不再提示"选项均保存在当前浏览器的 localStorage 中。更换设备或清理浏览器数据后不会保留。</li>
+                        <li><strong>元数据恢复</strong>：成品视频写入的切片元数据可通过"导入 → 从成品视频元数据导入"恢复片段列表，方便后续修改后重新合并。</li>
+                        <li><strong>临时文件</strong>：切片过程中生成的临时文件位于服务端 <code>clips_tmp/</code> 目录，合并完成后自动清理。服务重启时也自动清理残留临时文件。</li>
+                        <li><strong>缓存清理</strong>：服务端定期自动清理：临时文件（6 小时）、封面上传（24 小时）、缩略图缓存（7 天）、波形缓存（14 天）。</li>
+                        <li><strong>并发限制</strong>：合并任务和 B 站投稿任务各自同时只能运行一个，其余自动排队。投稿与合并互不干扰。</li>
+                        <li><strong>安全机制</strong>：所有文件访问经过 sanitize 校验，防止路径遍历。任务取消需要验证 token。</li>
+                        <li><strong>问题反馈</strong>：工具仍在持续迭代。如遇到异常，请保留错误提示、视频名称和操作步骤方便排查。</li>
                     </ul>
                 </div>
 
@@ -223,7 +326,7 @@
     </div>
 
     <!-- 待合并片段弹窗 -->
-    <div id="clipListModalOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
+    <div id="clipListModalOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
         <div class="modal clip-list-modal">
             <div class="modal-header clip-list-modal-header">
                 <span id="clipListModalTitle">待合并片段</span>
@@ -272,9 +375,12 @@
     </div>
 
     <!-- 主内容 -->
-    <div class="scroll-wrapper" id="mainContent" style="display:none;">
+    <div class="scroll-wrapper" id="mainContent">
         <div class="container">
-            <h1>括弧笑直播切片工具</h1>
+            <div style="display:flex; align-items:center; position:relative;">
+                <h1 style="margin:0; flex:1; text-align:center;">括弧笑直播切片工具</h1>
+                <button id="showIntroBtn" type="button" style="font-size:12px; padding:4px 12px; position:absolute; right:0; background:var(--accent-color); color:var(--accent-text-color); border:none; border-radius:8px; cursor:pointer; opacity:1;">使用说明</button>
+            </div>
 
             <!-- 视频选择区域（独立） -->
             <div class="panel" id="videoSelectPanel">
@@ -584,7 +690,7 @@
     </div>
 
     <!-- 全部预览弹窗（连续播放所有片段） -->
-    <div id="allPreviewOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
+    <div id="allPreviewOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
         <div class="modal all-preview-modal">
             <div class="modal-header all-preview-modal-header">
                 <span id="allPreviewTitle">预览全部</span>
