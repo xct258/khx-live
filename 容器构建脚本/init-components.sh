@@ -102,6 +102,7 @@ wget -O /opt/bililive/scripts/更新录播姬配置文件.py https://raw.githubu
 wget -O /opt/webclip/app.py https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/app.py
 wget -O /opt/webclip/static/favicon.ico https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/favicon.ico
 wget -O /opt/webclip/static/script.js https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/script.js
+wget -O /opt/webclip/static/background-switcher.js https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/background-switcher.js
 wget -O /opt/webclip/static/style.css https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/static/style.css
 wget -O /opt/webclip/templates/index.html https://raw.githubusercontent.com/xct258/khx-live/main/在线切片/templates/index.html
 

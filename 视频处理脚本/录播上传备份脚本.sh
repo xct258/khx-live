@@ -118,6 +118,9 @@ else
     log info "║  完整路径: ${dir}"
     log info "╚══════════════════════════════════════════╝"
 
+    # 清理当前目录中的 txt 日志文件
+    find "$dir" -type f -iname "*.txt" -delete 2>/dev/null
+
     # 取最早的文件提取元数据（用于确定缓存目录名）
     first_file=$(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -printf '%T@ %p\n' | sort -n | head -1 | cut -d' ' -f2-)
     if [[ -z "$first_file" ]]; then
@@ -506,15 +509,18 @@ else
         # 提取原始视频的音频
         # =============================
         if [[ "$ENABLE_ASR_SUBMIT" == "true" || "$ENABLE_AUDIO_EXTRACT" == "true" ]]; then
-          log info "开始从原始视频中提取音频"
+          log info "开始从原始视频中提取音频 (M4A)"
           audio_extract_ok=0
           audio_extract_fail=0
           for video_file in "$target_dir"*.mp4 "$target_dir"*.flv; do
             if [[ -f "$video_file" ]]; then
-              audio_file="${video_file%.*}.aac"
+              # 1. 将后缀名修改为 .m4a
+              audio_file="${video_file%.*}.m4a"
               AUDIO_START_TS=$(date +%s%N)
               log info "提取音频: $(basename "$video_file") -> $(basename "$audio_file")"
-              if ffmpeg -i "$video_file" -vn -c:a copy -loglevel error -y "$audio_file"; then
+              
+              # 2. 修改 ffmpeg 参数：使用 -c:a aac 确保网页端兼容性更好（可快进、拖动时间轴）
+              if ffmpeg -i "$video_file" -vn -c:a aac -loglevel error -y "$audio_file"; then
                 AUDIO_ELAPSED=$(( ($(date +%s%N) - AUDIO_START_TS) / 1000000 ))
                 log success "音频提取成功（耗时:${AUDIO_ELAPSED}ms）: $(basename "$audio_file")"
                 audio_files+=("$audio_file")
@@ -571,8 +577,16 @@ else
       # 清理临时文件
       # =============================
       if [ -d "$cache_dir" ]; then
-        # 找到第一个不符合条件的文件并赋值给变量
-        unexpected_file=$(find "$cache_dir" -type f ! -iname "*.log" ! -iname "*.jpg" -print -quit)
+        # 找到第一个不符合条件的文件并赋值给变量（加入了 txt, srt, m4a）
+        unexpected_file=$(find "$cache_dir" -type f \
+          ! -iname "*.log" \
+          ! -iname "*.jpg" \
+          ! -iname "*.txt" \
+          ! -iname "*.srt" \
+          ! -iname "*.acc" \
+          ! -iname "*.m4a" \
+          -print -quit)
+          
         if [ -n "$unexpected_file" ]; then
           log warn "检测到异常文件 [$(basename "$unexpected_file")]，跳过清理：${cache_dir}"
         else
