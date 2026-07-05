@@ -533,7 +533,7 @@ if [[ "$ENABLE_OPENCC" = "true" ]]; then
       medium)   REPO="Systran/faster-whisper-medium" ;;
       large-v2) REPO="Systran/faster-whisper-large-v2" ;;
       large-v3) REPO="Systran/faster-whisper-large-v3" ;;
-      large-v3-turbo|turbo) REPO="Systran/faster-whisper-large-v3-turbo" ;;
+      large-v3-turbo|turbo) REPO="Systran/faster-whisper-large-v3" ;;
       *)        REPO="$OPENCC_MODEL" ;;
     esac
     mkdir -p "$MODEL_DIR/$OPENCC_MODEL"
