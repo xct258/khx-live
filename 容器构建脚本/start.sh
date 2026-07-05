@@ -294,7 +294,8 @@ cat << 'EOF' > "$SCHEDULER_SCRIPT"
 #!/bin/bash
 
 CONFIG_FILE="/rec/config.conf"
-LOG_FILE="/rec/备份脚本执行日志.log"
+LOG_DIR="/rec/logs/上传备份脚本执行输出"
+mkdir -p "$LOG_DIR"
 
 source "/rec/脚本/log.sh"
 LOG_BASE_DIR="/rec/logs"
@@ -413,11 +414,9 @@ while true; do
         # ✅ 自检通过：至少有一个视频文件还在，属于正常录制完毕
         log info "自检通过（检测到有效录制产物）。直接开始执行备份脚本..."
         
-        BACKUP_START_TS=$(date +%s)
-        /rec/脚本/录播上传备份脚本.sh >> "$LOG_FILE" 2>&1
-        BACKUP_ELAPSED=$(( $(date +%s) - BACKUP_START_TS ))
-        
-        log info "备份脚本执行完毕（耗时:${BACKUP_ELAPSED}s）"
+        BACKUP_LOG="$LOG_DIR/录播上传备份脚本_$(date +%Y%m%d_%H%M%S).log"
+        /rec/脚本/录播上传备份脚本.sh >> "$BACKUP_LOG" 2>&1 &
+        (ls -t "$LOG_DIR"/*.log 2>/dev/null | tail -n +6 | xargs -r rm -f) &
       fi
 
       # 无论成功备份还是触发熔断，最终都重置会话，迎接下一次录制

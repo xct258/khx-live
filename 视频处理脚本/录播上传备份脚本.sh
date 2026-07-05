@@ -118,13 +118,44 @@ else
     log info "║  完整路径: ${dir}"
     log info "╚══════════════════════════════════════════╝"
 
-    # 记录处理前目录状态
-    pre_count=$(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" -o -name "*.xml" \) 2>/dev/null | wc -l)
-    pre_size=$(dir_video_size "$dir")
+    # 先随便找一个文件提取元数据（用于确定缓存目录名）
+    first_file=$(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -print -quit 2>/dev/null)
+    if [[ -z "$first_file" ]]; then
+      log info "目录 ${dir} 中无视频文件，直接移除"
+      rm -rf "$dir"
+      continue
+    fi
+    base_filename=$(basename "$first_file")
+    start_time=$(echo "$base_filename" | cut -d '_' -f 2 | cut -d '.' -f 1)
+    streamer_name=$(echo "$base_filename" | sed -E 's/.*_(.*)\..*/\1/')
+    [[ "$streamer_name" == "高机动持盾军官" ]] && streamer_name="括弧笑bilibili"
+    recording_platform=$(echo "$base_filename" | cut -d'_' -f 1 | sed 's/^投稿版-//')
+
+    # 创建缓存目录，立即将源目录所有文件整体移入
+    cache_dir="${source_backup}/正在处理中/${streamer_name}/${start_time}"
+    mkdir -p "$cache_dir"
+    log info "立即将所有文件从 ${dir} 移至缓存目录: ${cache_dir}"
+
+    moved_count=0
+    moved_size=0
+    while IFS= read -r -d '' f; do
+      mv "$f" "$cache_dir/"
+      ((moved_count++))
+      ((moved_size += $(stat -c%s "$f" 2>/dev/null || echo 0)))
+    done < <(find "$dir" -type f -print0 2>/dev/null)
+
+    TOTAL_FILES_MOVED=$((TOTAL_FILES_MOVED + moved_count))
+    log info "移动完成 —— 共 ${moved_count} 个文件，视频总大小:$(format_size $moved_size)"
+    find "$dir" -type d -empty -delete 2>/dev/null
+    rmdir "$dir" 2>/dev/null || log warn "源目录 ${dir} 非空，跳过删除"
+    cache_dirs+=("$cache_dir")
+
+    # 记录处理前信息
+    pre_count=$(find "$cache_dir" -type f \( -name "*.mp4" -o -name "*.flv" -o -name "*.xml" \) 2>/dev/null | wc -l)
+    pre_size=$(dir_video_size "$cache_dir")
     log info "处理前信息 —— 文件数:${pre_count} 视频总大小:$(format_size $pre_size)"
 
     # --- 第一阶段：极速清理小视频及其关联 XML ---
-    # 依赖 find 的 -size -10M 参数，直接读取底层文件系统元数据，零 I/O 负担
     clean_count=0
     while IFS= read -r -d '' video; do
         ((clean_count++))
@@ -133,53 +164,26 @@ else
         base_path="${video%.*}"
         rm -f "$video"
         ((TOTAL_CLEANED_SMALL++))
-        
-        # 同步尝试删除同名的 XML
         if [[ -f "${base_path}.xml" ]]; then
             rm -f "${base_path}.xml"
             log info "同步删除关联的 XML: ${base_path}.xml"
         fi
-    done < <(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -size -10M -print0)
+    done < <(find "$cache_dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -size -10M -print0)
 
     if [[ $clean_count -gt 0 ]]; then
       log info "第一阶段完成：共清理 ${clean_count} 个小视频"
     fi
 
-    # --- 第二阶段：重新读取有效文件路径，并提取元数据 ---
-    mapfile -t input_files < <(find "$dir" -type f \( -name "*.flv" -o -name "*.mp4" -o -name "*.xml" \) | sort)
+    # --- 第二阶段：读取缓存目录中的有效文件 ---
+    mapfile -t input_files < <(find "$cache_dir" -type f \( -name "*.flv" -o -name "*.mp4" -o -name "*.xml" \) | sort)
 
     if [[ ${#input_files[@]} -eq 0 ]]; then
-        log info "目录 ${dir} 清理后已无有效视频，直接移除"
-        rm -rf "$dir"
+        log info "缓存目录 ${cache_dir} 中已无有效视频，跳过"
         continue
     fi
-    
-    log info "清理后剩余 ${#input_files[@]} 个有效文件"
+    log info "有效文件 ${#input_files[@]} 个"
 
-    # 获取第一个有效文件的信息，用于提取直播开始时间和主播名称
-    first_file="${input_files[0]}"
-    # 示例：录播姬_2024年12月01日22点13分11秒_暗区最穷_高机动持盾军官.flv
-    base_filename=$(basename "$first_file")
-
-    # 获取开播时间
-    start_time=$(echo "$base_filename" | cut -d '_' -f 2 | cut -d '.' -f 1)
-
-    # 获取主播名称
-    streamer_name=$(echo "$base_filename" | sed -E 's/.*_(.*)\..*/\1/')
-    if [[ "$streamer_name" == "高机动持盾军官" ]]; then
-        streamer_name="括弧笑bilibili"
-    fi
-
-    # 获取录制平台
-    recording_platform=$(echo "$base_filename" | cut -d'_' -f 1 | sed 's/^投稿版-//')
-
-    # 设置并创建缓存目录
-    cache_dir="${source_backup}/正在处理中/${streamer_name}/${start_time}"
-    mkdir -p "$cache_dir"
-    cache_dirs+=("$cache_dir")
-    log info "缓存目录: ${cache_dir}"
-
-    # --- 第三阶段：处理有效的大视频和 XML 的移动/转换 ---
+    # --- 第三阶段：处理有效的大视频和 XML 的转换 ---
     for file in "${input_files[@]}"; do
         [[ ! -f "$file" ]] && continue
 
@@ -189,21 +193,11 @@ else
 
         case "$ext" in
             xml|mp4)
-                log info "移动文件: $file (大小:$(format_size $fsize) 类型:$ext)"
-                if mv "$file" "$cache_dir/"; then
-                    ((TOTAL_FILES_MOVED++))
-                else
-                    upload_success=false
-                fi
+                log info "保留文件: $file (大小:$(format_size $fsize) 类型:$ext)"
                 ;;
             flv)
                 if [[ "$CONVERT_FLV_TO_MP4" != "true" && "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
-                    log info "配置禁用 flv 转换，直接移动原文件: $file (大小:$(format_size $fsize))"
-                    if mv "$file" "$cache_dir/"; then
-                        ((TOTAL_FILES_MOVED++))
-                    else
-                        upload_success=false
-                    fi
+                    log info "配置禁用 flv 转换，保留原文件: $file (大小:$(format_size $fsize))"
                     continue
                 fi
 
@@ -216,18 +210,10 @@ else
                     rm -f "$file"
                     log success "转换成功（耗时:${CONV_ELAPSED}ms 输出大小:$(format_size $out_size)），已清理源文件"
                     ((TOTAL_CONVERT_OK++))
-                    ((TOTAL_FILES_MOVED++))
                 else
                     CONV_ELAPSED=$(( ($(date +%s%N) - CONV_START_TS) / 1000000 ))
                     log error "转换失败（耗时:${CONV_ELAPSED}ms）：$file，保留原视频"
                     ((TOTAL_CONVERT_FAIL++))
-                    if mv "$file" "$cache_dir/"; then
-                        log info "已将原文件移动到缓存目录"
-                        ((TOTAL_FILES_MOVED++))
-                    else
-                        log error "无法移动原视频到缓存目录：$file"
-                        upload_success=false
-                    fi
                 fi
                 ;;
         esac
@@ -236,10 +222,9 @@ else
     # --- 第四阶段：收尾 ---
     DIR_ELAPSED=$(( $(date +%s) - DIR_START_TS ))
     if $upload_success; then
-        rm -rf "$dir"
-        log success "目录处理完成（耗时:${DIR_ELAPSED}s），已删除原目录：$dir"
+        log success "目录处理完成（耗时:${DIR_ELAPSED}s）"
     else
-        log error "目录 ${dir} 中有文件处理失败（耗时:${DIR_ELAPSED}s），保留原目录以备人工检查"
+        log error "目录 ${dir} 中有文件处理失败（耗时:${DIR_ELAPSED}s）"
         ((TOTAL_DIR_FAILED++))
     fi
   done
