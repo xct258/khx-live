@@ -529,25 +529,22 @@ if [[ "$ENABLE_OPENCC" = "true" ]]; then
     HF_BASE="https://huggingface.co"
     case "$OPENCC_MODEL" in
       tiny)     REPO="Systran/faster-whisper-tiny" ;;
-      tiny.en)  REPO="Systran/faster-whisper-tiny.en" ;;
       base)     REPO="Systran/faster-whisper-base" ;;
-      base.en)  REPO="Systran/faster-whisper-base.en" ;;
       small)    REPO="Systran/faster-whisper-small" ;;
-      small.en) REPO="Systran/faster-whisper-small.en" ;;
       medium)   REPO="Systran/faster-whisper-medium" ;;
-      medium.en) REPO="Systran/faster-whisper-medium.en" ;;
       large-v2) REPO="Systran/faster-whisper-large-v2" ;;
       large-v3) REPO="Systran/faster-whisper-large-v3" ;;
-      large-v3-turbo|turbo) REPO="Systran/faster-whisper-large-v3" ;;
+      large-v3-turbo|turbo) REPO="Systran/faster-whisper-large-v3-turbo" ;;
       *)        REPO="$OPENCC_MODEL" ;;
     esac
     mkdir -p "$MODEL_DIR/$OPENCC_MODEL"
     cd "$MODEL_DIR/$OPENCC_MODEL"
     wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/config.json"
     wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/tokenizer.json"
-    wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/vocabulary.txt" || true
+    wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/vocabulary.json"
+    wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/preprocessor_config.json"
     wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/model.bin"
-    if [ $? -eq 0 ] && [ -f config.json ] && [ -f model.bin ]; then
+    if [ $? -eq 0 ] && [ -f config.json ] && [ -f model.bin ] && [ -f vocabulary.json ] && [ -f preprocessor_config.json ]; then
       log info "【成功】模型 $OPENCC_MODEL 下载完毕！"
     else
       log warn "【错误】模型 $OPENCC_MODEL 下载失败，可尝试其他模型或手动下载放到 $MODEL_DIR/$OPENCC_MODEL/"
