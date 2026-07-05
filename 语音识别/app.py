@@ -38,7 +38,7 @@ if os.path.exists(CONFIG_PATH):
         for line in f:
             line = line.strip()
             if line.startswith("OPENCC_MODEL="):
-                v = line.split("=", 1)[1].strip().strip("'\""")
+                v = line.split("=", 1)[1].strip().strip("'\"")
                 if v:
                     MODEL_NAME = v
                 break
