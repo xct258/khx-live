@@ -20,7 +20,7 @@ if [[ "$operation" != "1" && "$operation" != "2" && "$operation" != "3" ]]; then
 fi
 
 ### === 输入文件 === ###
-read -p "请输入视频文件路径: " input_video
+read -e -p "请输入视频文件路径: " input_video
 if [[ ! -f "$input_video" ]]; then
     echo "❌ 视频文件不存在"
     exit 1
