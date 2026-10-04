@@ -27,6 +27,18 @@ generate_upload_desc() {
     -e "/^封面时间：.*P 0$/d"
 }
 
+# 是否将原版视频追加到指定VID
+should_append_raw_video() {
+  [[ "$ENABLE_APPEND_RAW_VIDEO" == "true" ]]
+}
+
+# 未压制视频路由：只追加，不参与新投稿
+enqueue_raw_video() {
+  if should_append_raw_video; then
+    append_files+=("$1")
+  fi
+}
+
 # 封装的文件大小格式化
 format_size() {
   local bytes=$1
@@ -66,7 +78,7 @@ log info "═══════════════════════�
 log info "磁盘使用情况 ——$(df -h "$source_backup" 2>/dev/null | awk 'NR==2{printf " 总量:%s 已用:%s 可用:%s 使用率:%s", $2, $3, $4, $5}')"
 
 # 记录关键配置状态
-log info "配置状态 —— 弹幕压制:${ENABLE_DANMAKU_OVERLAY:-false} 视频上传:${ENABLE_VIDEO_UPLOAD:-false} 网盘备份:${ENABLE_RCLONE_UPLOAD:-false} 自动清理:${ENABLE_CLEANUP:-false} FLV转换:${CONVERT_FLV_TO_MP4:-false}"
+log info "配置状态 —— 弹幕压制:${ENABLE_DANMAKU_OVERLAY:-false} 压制模式:${DANMAKU_MODE:-both} 视频上传:${ENABLE_VIDEO_UPLOAD:-false} 网盘备份:${ENABLE_RCLONE_UPLOAD:-false} 自动清理:${ENABLE_CLEANUP:-false} FLV转换:${CONVERT_FLV_TO_MP4:-false} 原版追加:${ENABLE_APPEND_RAW_VIDEO:-false}"
 log info "保留天数: ${RETENTION_DAYS:-3} 天"
 
 # 全局统计
@@ -80,6 +92,8 @@ TOTAL_DANMAKU_OK=0           # 弹幕压制成功数
 TOTAL_DANMAKU_SKIP=0         # 弹幕压制跳过数
 TOTAL_UPLOAD_OK=0            # 投稿成功数
 TOTAL_UPLOAD_FAIL=0          # 投稿失败数
+TOTAL_APPEND_OK=0            # 追加投稿成功数
+TOTAL_APPEND_FAIL=0          # 追加投稿失败数
 TOTAL_RCLONE_OK=0            # 网盘备份成功数
 TOTAL_RCLONE_FAIL=0          # 网盘备份失败数
 TOTAL_DELETED_DIRS=0         # 清理删除的目录数
@@ -252,6 +266,7 @@ else
     compressed_files=()
     original_files=()
     audio_files=()
+    append_files=()
 
     # 处理从临时目录获取的文件路径
     mapfile -d '' -t input_files < <(find "$cache_dir" -type f -print0 | sort -z)
@@ -296,6 +311,62 @@ else
     log info "开播时间: $start_time"
     log info "上传标题: ${formatted_start_time_4} [${stream_title}]"
 
+    # =============================
+    # 预收集：先追加原版视频到指定稿件（在压制之前）
+    # =============================
+    if should_append_raw_video; then
+      if [[ -z "$APPEND_RAW_VIDEO_VID" ]]; then
+        log error "ENABLE_APPEND_RAW_VIDEO 已开启但未配置 APPEND_RAW_VIDEO_VID，跳过追加"
+      else
+        # 收集所有非投稿版的原始视频文件
+        for video_file in "${input_files[@]}"; do
+          [[ ! -f "$video_file" ]] && continue
+          filename=$(basename "$video_file")
+          [[ "$filename" == 投稿版-* ]] && continue
+          ext="${filename##*.}"
+          [[ "$ext" != "mp4" && "$ext" != "flv" ]] && continue
+          append_files+=("${cache_dir}/${filename}")
+        done
+
+        if [[ ${#append_files[@]} -gt 0 ]]; then
+          log info "开始追加 ${#append_files[@]} 个未压制视频到稿件 ${APPEND_RAW_VIDEO_VID}"
+          # 先为所有文件生成唯一临时名，避免重名
+          declare -A temp_names
+          n=1
+          for f in "${append_files[@]}"; do
+            [[ ! -f "$f" ]] && continue
+            filename=$(basename "$f")
+            ext="${filename##*.}"
+            new_name="${start_time}.${ext}"
+            while [[ -e "${cache_dir}/${new_name}" ]] || [[ -n "${temp_names[$new_name]}" ]]; do
+              new_name="${start_time}_${n}.${ext}"
+              ((n++))
+            done
+            temp_names[$new_name]="$f"
+          done
+
+          for new_name in "${!temp_names[@]}"; do
+            f="${temp_names[$new_name]}"
+            filename=$(basename "$f")
+            mv "$f" "${cache_dir}/${new_name}"
+            APPEND_START_TS=$(date +%s)
+            append_output=$("$source_backup/biliup/biliup" -u "${biliup_up_cookies}" append --vid "$APPEND_RAW_VIDEO_VID" "${cache_dir}/${new_name}" 2>&1)
+            append_exit=$?
+            APPEND_ELAPSED=$(( $(date +%s) - APPEND_START_TS ))
+            mv "${cache_dir}/${new_name}" "$f"
+            if [[ $append_exit -eq 0 ]] && echo "$append_output" | grep -q "稿件修改成功"; then
+              log success "追加成功（耗时:${APPEND_ELAPSED}s）：$filename -> ${APPEND_RAW_VIDEO_VID}"
+              ((TOTAL_APPEND_OK++))
+            else
+              log error "追加失败（耗时:${APPEND_ELAPSED}s）：$filename"
+              ((TOTAL_APPEND_FAIL++))
+              upload_success=false
+            fi
+          done
+        fi
+      fi
+    fi
+
     for video_file in "${input_files[@]}"; do
       if [[ -f "$video_file" ]]; then
         # 获取文件名（不带路径）
@@ -325,28 +396,28 @@ else
             if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
               danmaku_reason="弹幕压制已禁用"
               log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY），跳过所有检测与压制"
-              compressed_files+=("${cache_dir}/${filename}")
+              enqueue_raw_video "${cache_dir}/${filename}"
             
             # ==================== 2. 启用后，再检查弹幕 XML 是否存在 ====================
             elif [[ ! -f "${cache_dir}/${xml_file}" ]]; then
               danmaku_reason="未检测到弹幕 XML 文件"
               log warn "未检测到弹幕 XML 文件，跳过弹幕压制：${cache_dir}/${xml_file}"
-              compressed_files+=("${cache_dir}/${filename}")
+              enqueue_raw_video "${cache_dir}/${filename}"
 
             # ==================== 3. 存在后，再检查弹幕内容是否符合规则 ====================
             elif ! grep -aEq '^\s*<(d|sc|gift|guard)' "${cache_dir}/${xml_file}"; then
               danmaku_reason="弹幕文件内容为空或不符合预期"
               log warn "弹幕文件内容为空或不符合预期，跳过弹幕压制：${cache_dir}/${xml_file}"
-              compressed_files+=("${cache_dir}/${filename}")
+              enqueue_raw_video "${cache_dir}/${filename}"
 
             else
               danmaku_reason=""
               # ==================== 4. 规则校验通过，进入时间差与压制核心逻辑 ====================
               log info "检测到有效弹幕文件，准备时间差校验：${cache_dir}"
-              
+
               DIFF_RESULT=$(/rec/脚本/对比视频和弹幕的时长.sh "$video_file" -s 2>/dev/null)
               IS_SAFE_TO_PROCESS=0
-              
+
               if [[ -n "$DIFF_RESULT" ]]; then
                 ABS_DIFF=$(echo "$DIFF_RESULT" | tr -d '+-')
                 IS_OVER_LIMIT=$(awk -v diff="$ABS_DIFF" -v limit="$MAX_DIFF_LIMIT" 'BEGIN { print (diff > limit) ? 1 : 0 }')
@@ -366,12 +437,13 @@ else
                 danmaku_action="压制"
                 DANMAKU_START_TS=$(date +%s)
                 log info "开始弹幕压制：${cache_dir}"
+                # 输出模式由 DANMAKU_MODE 配置控制：
                 # --mode both/all:       生成投稿版(无进度条) + 预览版(无进度条)
                 # --mode clean:          只生成投稿版(无进度条)，不生成预览版
                 # --mode both-bar:       生成投稿版(无进度条) + 预览版(带进度条)
                 # --mode preview:        只生成预览版(带进度条)
                 # --mode preview-clean:  只生成预览版(无进度条)
-                if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode both; then
+                if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode "${DANMAKU_MODE:-both}"; then
                   DANMAKU_ELAPSED=$(( $(date +%s) - DANMAKU_START_TS ))
                   if [[ -f "${cache_dir}/${output_file}" ]]; then
                     out_size=$(stat -c%s "${cache_dir}/${output_file}" 2>/dev/null || echo 0)
@@ -380,18 +452,18 @@ else
                     ((TOTAL_DANMAKU_OK++))
                   else
                     log error "压制脚本执行成功但未生成目标文件（耗时:${DANMAKU_ELAPSED}s），使用原视频：$filename"
-                    compressed_files+=("${cache_dir}/${filename}")
+                    enqueue_raw_video "${cache_dir}/${filename}"
                     ((TOTAL_DANMAKU_SKIP++))
                   fi
                 else
                   DANMAKU_ELAPSED=$(( $(date +%s) - DANMAKU_START_TS ))
                   log error "视频弹幕压制失败（耗时:${DANMAKU_ELAPSED}s）：$output_file"
-                  compressed_files+=("${cache_dir}/${filename}")
+                  enqueue_raw_video "${cache_dir}/${filename}"
                   ((TOTAL_DANMAKU_SKIP++))
                 fi
               else
                 ((TOTAL_DANMAKU_SKIP++))
-                compressed_files+=("${cache_dir}/${filename}")
+                enqueue_raw_video "${cache_dir}/${filename}"
               fi
             fi # 结束核心条件判断
           fi
@@ -415,6 +487,9 @@ else
       if [[ "$ENABLE_VIDEO_UPLOAD" != "true" ]]; then
         log warn "上传已被禁用，跳过投稿步骤（共 ${upload_files_count} 个文件，总计 $(format_size $upload_total_size)）"
         danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/禁用投稿/压制版/${formatted_start_time_3}/"
+      elif [[ ${#compressed_files[@]} -eq 0 ]]; then
+        log warn "没有需要投稿的文件（未压制视频已追加到指定稿件），跳过新投稿"
+        danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
       else
         log info "开始上传视频 —— ${upload_files_count} 个文件，总计 $(format_size $upload_total_size)"
         for f in "${compressed_files[@]}"; do
@@ -726,6 +801,7 @@ log info "  文件移动: ${TOTAL_FILES_MOVED} 个"
 log info "  FLV→MP4转换: 成功 ${TOTAL_CONVERT_OK} / 失败 ${TOTAL_CONVERT_FAIL}"
 log info "  弹幕压制: 成功 ${TOTAL_DANMAKU_OK} / 跳过 ${TOTAL_DANMAKU_SKIP}"
 log info "  B站投稿: 成功 ${TOTAL_UPLOAD_OK} / 失败 ${TOTAL_UPLOAD_FAIL}"
+log info "  追加投稿: 成功 ${TOTAL_APPEND_OK} / 失败 ${TOTAL_APPEND_FAIL}"
 log info "  网盘备份: 成功 ${TOTAL_RCLONE_OK} / 失败 ${TOTAL_RCLONE_FAIL}"
 log info "  旧视频清理: ${TOTAL_DELETED_DIRS} 个目录"
 log info "═══════════════════════════════════════════════"
