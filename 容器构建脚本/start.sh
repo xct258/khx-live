@@ -34,6 +34,8 @@ if [ ! -f /rec/config.conf ]; then
   cp /opt/bililive/config/config.conf /rec/config.conf
 fi
 
+# STATUS_FILE: 幂等标记文件，记录一次性重操作是否已完成，避免容器重启重复执行
+# 路径在容器内 /app/.status（重启保留，重建重置）；成功后以 KEY="时间" 追加标记，用 grep -q 判断跳过
 STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 source /rec/config.conf
@@ -105,7 +107,7 @@ source /rec/脚本/log.sh
 LOG_BASE_DIR=/rec/logs
 LOG_APP_NAME="容器主脚本"
 
-# intel核显驱动安装
+# intel核显驱动安装（一次性：查 STATUS_FILE 有无 INTEL_GPU_INSTALLED，有则跳过）
 if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
   if ! grep -q "INTEL_GPU_INSTALLED" "$STATUS_FILE"; then
     log info "检测到开启 Intel 核显加速，正在安装驱动..."
@@ -119,6 +121,7 @@ if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
 
     if [ $? -eq 0 ]; then
       CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+      # 安装成功才打标记，下次重启 grep 到即跳过
       echo "INTEL_GPU_INSTALLED=\"$CURRENT_TIME\"" >> "$STATUS_FILE"
       log info "【成功】Intel 核显驱动安装完毕！"
     else
@@ -441,6 +444,7 @@ WEBCLIP_SCHEDULER_SCRIPT="/usr/local/bin/在线切片启动脚本.sh"
 cat << 'EOF' > "$WEBCLIP_SCHEDULER_SCRIPT"
 #!/bin/bash
 CONFIG_FILE="/rec/config.conf"
+# STATUS_FILE: 幂等标记文件，与主脚本共用 /app/.status，用于跳过已完成的在线切片依赖安装
 STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 
@@ -453,7 +457,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
 fi
 
 if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
-  # 检查是否已安装过
+  # 检查是否已安装过（查 STATUS_FILE 有无 WEBCLIP_INSTALLED）
   if ! grep -q "WEBCLIP_INSTALLED" "$STATUS_FILE"; then
     log info "检测到开启在线切片，正在安装 Web 依赖..."
     pip install \
@@ -465,6 +469,7 @@ if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
     --break-system-packages > /dev/null 2>&1
 
     if [ $? -eq 0 ]; then
+      # 安装成功才打标记，下次重启 grep 到即跳过安装、直接启动服务
       echo "WEBCLIP_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
       log info "【成功】在线切片依赖安装完毕！"
     else
@@ -489,6 +494,7 @@ OPENCC_SCHEDULER_SCRIPT="/usr/local/bin/语音识别启动脚本.sh"
 cat << 'EOF' > "$OPENCC_SCHEDULER_SCRIPT"
 #!/bin/bash
 CONFIG_FILE="/rec/config.conf"
+# STATUS_FILE: 幂等标记文件，与主脚本共用 /app/.status，用于跳过已完成的语音识别依赖安装
 STATUS_FILE="/app/.status"
 touch "$STATUS_FILE"
 
@@ -501,7 +507,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
 fi
 
 if [[ "$ENABLE_OPENCC" = "true" ]]; then
-  # 检查是否已安装过
+  # 检查是否已安装过（查 STATUS_FILE 有无 SPEECH_INSTALLED）
   if ! grep -q "SPEECH_INSTALLED" "$STATUS_FILE"; then
     log info "检测到开启语音识别，正在安装 AI 依赖（包体较大，请耐心等待）..."
     pip install \
@@ -511,6 +517,7 @@ if [[ "$ENABLE_OPENCC" = "true" ]]; then
     --break-system-packages > /dev/null 2>&1
 
     if [ $? -eq 0 ]; then
+      # 安装成功才打标记，下次重启 grep 到即跳过安装、直接走模型检查和启动
       echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
       log info "【成功】语音识别依赖安装完毕！"
     else
@@ -609,12 +616,13 @@ EOF
 chmod +x "$COOKIE_SCHEDULER_SCRIPT"
 "$COOKIE_SCHEDULER_SCRIPT" &
 
-# 输出账户信息（首次强制输出到终端，后续仅记录日志）
+# 输出账户信息（一次性：查 STATUS_FILE 有无 CREDENTIALS_SHOWN，无则强制输出到终端并打标记，有则仅记日志）
 if ! grep -q "CREDENTIALS_SHOWN" "$STATUS_FILE" 2>/dev/null; then
     log -f info "当前录播姬用户名:"
     log -f info "$Bililive_USER"
     log -f info "当前录播姬密码:"
     log -f info "$Bililive_PASS"
+    # 写入标记，下次重启不再强制输出到终端
     echo "CREDENTIALS_SHOWN=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
 else
     log info "当前录播姬用户名:"
