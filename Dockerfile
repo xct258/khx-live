@@ -1,7 +1,8 @@
 FROM xct258/debian-cn
 
 # 安装构建所需的相关依赖
-RUN apt install -y wget \
+RUN apt-get update \
+    && apt-get install -y wget \
     # 创建临时目录
     && mkdir -p /root/tmp \
     # 下载容器构建脚本
