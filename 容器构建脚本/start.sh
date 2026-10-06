@@ -15,8 +15,6 @@ mkdir -p /rec/在线切片/static
 mkdir -p /rec/在线切片/templates
 mkdir -p /rec/语音识别
 
-
-
 TOKEN_FILE="/app/.github_token"
 # 1. 如果环境变量传入了 Token，优先使用并持久化保存到文件
 if [ -n "$XCT258_GITHUB_TOKEN" ]; then
@@ -281,17 +279,7 @@ else
   fi
 fi
 
-# 启动 biliup(暂时不使用biliup录制，只用于上传)
-#/rec/biliup/biliup server --auth > /dev/null 2>&1
-
-#if ! pgrep -f "biliup" > /dev/null; then
-#  log warn "biliup启动失败"
-#else
-#  log info "biliup运行中"
-#fi
-
-
-# 创建并启动每日视频上传备份定时任务
+# 创建并启动视频上传备份监控（常驻轮询：每5分钟检查，录制结束自动触发备份，非cron每日任务）
 SCHEDULER_SCRIPT="/usr/local/bin/执行视频备份脚本.sh"
 cat << 'EOF' > "$SCHEDULER_SCRIPT"
 #!/bin/bash
@@ -306,26 +294,27 @@ LOG_APP_NAME="备份执行脚本"
 LOG_MAX_FILES=100
 
 LAST_STATUS=0
-PREVIOUS_ACTIVE_FILES=""      # 录制中用来比对新增文件的“当前活跃快照”
-HISTORY_ACTIVE_FILES=""       # 【新增】用来做最终存在性检测的“全量历史累加池”
-declare -A MISSING_DIR_REPORTED
+PREVIOUS_ACTIVE_FILES=""      # 上轮活跃文件快照，用于比对新增文件
+HISTORY_ACTIVE_FILES=""       # 本轮全量历史池，用于下播前存在性熔断自检
+declare -A MISSING_DIR_REPORTED  # 缺失目录仅警告一次
 
-DEFAULT_SLEEP_TIME="5"            # 循环时间（分钟）
-SCAN_FRESHNESS_MIN="20"         # find 直接查找的时间（分钟）
+DEFAULT_SLEEP_TIME="5"            # 轮询间隔（分钟）
+SCAN_FRESHNESS_MIN="20"         # 判定“正在录制”的文件新鲜度窗口（分钟）
 
 print_welcome_banner() {
   log info "═══════════════════════════════════════════════"
-  log info "  目录监控脚本已启动/重置"
-  log info "  检查间隔: ${DEFAULT_SLEEP_TIME}m"
-  log info "  文件写入静默阈值: 直接使用 find 过滤 ${SCAN_FRESHNESS_MIN} 分钟"
-  log info "  安全防护机制: 历史视频存在性文件级熔断自检"
+  log info "备份监控就绪"
+  log info "检查间隔: ${DEFAULT_SLEEP_TIME}m"
+  log info "静默阈值: ${SCAN_FRESHNESS_MIN}分钟无写入判下播"
+  log info "熔断自检: 历史文件全消失则跳过备份"
   log info "═══════════════════════════════════════════════"
 }
 
-# 启动打印
+# 启动横幅
 print_welcome_banner
 
 while true; do
+  # 每轮重载配置，支持不重启容器改开关
 
   if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -335,7 +324,8 @@ while true; do
   fi
 
   if [[ "$ENABLE_UPLOAD_SCRIPT" != "true" ]]; then
-    log info "上传备份未启用(ENABLE_UPLOAD_SCRIPT=$ENABLE_UPLOAD_SCRIPT)，跳过检查"
+    # 未启用时降为debug，避免每5分钟刷一条info淹没正常日志
+    log debug "备份未启用(ENABLE_UPLOAD_SCRIPT=$ENABLE_UPLOAD_SCRIPT)，跳过本轮"
     sleep "$((DEFAULT_SLEEP_TIME * 60))"
     continue
   fi
@@ -352,7 +342,7 @@ while true; do
       continue
     fi
 
-    # 直接查找 20 分钟内是否有新文件写入
+    # 扫描各监控目录：20分钟内有新写入即判定为录制中
     RECENT_FILES=$(find "$folder" -type f -mmin -"$SCAN_FRESHNESS_MIN" 2>/dev/null)
     if [[ -n "$RECENT_FILES" ]]; then
       ANY_RECORDING=true
@@ -360,30 +350,31 @@ while true; do
     fi
   done
 
-  # 核心状态控制逻辑
+  # 状态机：LAST_STATUS 0=空闲，1=录制中；仅 1->0 跃迁时触发备份
   if [[ "$ANY_RECORDING" = true ]]; then
     CURRENT_ACTIVE_FILES=$(echo "$SAVED_RECENT_FILES" | sed '/^\s*$/d')
     file_count=$(echo "$CURRENT_ACTIVE_FILES" | wc -l)
 
     if [[ $LAST_STATUS -eq 0 ]]; then
-      log info "检测到新录制启动，当前有 ${file_count} 个文件处于活跃写入状态："
+      # 录制开始用success醒目，文件清单降为debug避免刷屏
+      log success "录制开始：${file_count}个活跃文件"
       echo "$CURRENT_ACTIVE_FILES" | while read -r file; do
-        log info "录制文件: $file"
+        log debug "录制文件: $file"
       done
       LAST_STATUS=1
     else
-      # 录制中，比对并追加新文件到日志
+      # 录制中：与上轮快照比对，仅打印新增文件（debug避免每轮刷屏）
       echo "$CURRENT_ACTIVE_FILES" | while read -r file; do
         if ! echo "$PREVIOUS_ACTIVE_FILES" | grep -Fqx "$file" 2>/dev/null; then
-          log info "新增文件: $file"
+          log debug "新增文件: $file"
         fi
       done
     fi
     
-    # 更新快照用于下一次比对新文件
+    # 更新快照供下一轮比对
     PREVIOUS_ACTIVE_FILES="$CURRENT_ACTIVE_FILES"
     
-    # 🌟 动态更新“历史全量池”，把整场录制产生过的文件合并、去重累加进去
+    # 累加本轮全量历史（去重），供下播熔断自检用
     if [[ -z "$HISTORY_ACTIVE_FILES" ]]; then
       HISTORY_ACTIVE_FILES="$CURRENT_ACTIVE_FILES"
     else
@@ -391,12 +382,12 @@ while true; do
     fi
 
   else
-    # 进入 SCAN_FRESHNESS_MIN 分钟完全无新写入的状态
+    # 无新写入：仅处理 1->0 的下播瞬间
     if [[ $LAST_STATUS -eq 1 ]]; then
       
-      log info "${SCAN_FRESHNESS_MIN}分钟无新写入，正在执行备份前置自检：检查本轮录制文件的存在性..."
+      log info "下播判定：${SCAN_FRESHNESS_MIN}分钟无写入，自检历史文件存在性..."
       
-      # 🛡️ 核心自检：遍历历史记录里出现过的文件，只要有一个还活在硬盘上就判定安全
+      # 熔断自检：历史池中只要还有一个文件存在，即正常下播；全消失则是人为删除，放弃备份
       ANY_FILE_EXISTS=false
       total_checked=0
       
@@ -405,24 +396,27 @@ while true; do
         ((total_checked++))
         if [[ -f "$file" ]]; then
           ANY_FILE_EXISTS=true
-          break # 只要抓到一个活着的视频，就通过验证，不需要往下看了
+          break # 命中一个即通过，无需全量扫描
         fi
       done <<< "$HISTORY_ACTIVE_FILES"
 
-      # 根据自检结果决定是否熔断
+      # 熔断：历史文件全部消失，疑似人为删除，跳过备份
       if [[ "$ANY_FILE_EXISTS" = false ]] && [[ $total_checked -gt 0 ]]; then
-        # ❌ 触发熔断：刚才记录的所有文件其实都被删掉了，这不是下播，是用户在删目录
-        log warn "【安全熔断】本轮记录的 ${total_checked} 个历史活跃文件在硬盘上已全部不存！放弃执行备份脚本。"
+        # 熔断分支：warn醒目，带数量便于排查
+        log warn "安全熔断：${total_checked}个历史文件全消失，疑似人为删除，跳过备份"
       else
-        # ✅ 自检通过：至少有一个视频文件还在，属于正常录制完毕
-        log info "自检通过（检测到有效录制产物）。直接开始执行备份脚本..."
-        
+        # 正常下播：异步执行备份，日志按时间命名，仅保留最新5份
         BACKUP_LOG="$LOG_DIR/录播上传备份脚本_$(date +%Y%m%d_%H%M%S).log"
-        /rec/脚本/录播上传备份脚本.sh >> "$BACKUP_LOG" 2>&1 &
-        (ls -t "$LOG_DIR"/*.log 2>/dev/null | tail -n +6 | xargs -r rm -f) &
+        if [[ ! -x "/rec/脚本/录播上传备份脚本.sh" ]]; then
+          log error "备份脚本缺失/不可执行：/rec/脚本/录播上传备份脚本.sh，跳过本轮"
+        else
+          log success "自检通过，触发备份：$BACKUP_LOG"
+          /rec/脚本/录播上传备份脚本.sh >> "$BACKUP_LOG" 2>&1 &
+          (ls -t "$LOG_DIR"/*.log 2>/dev/null | tail -n +6 | xargs -r rm -f) &
+        fi
       fi
 
-      # 无论成功备份还是触发熔断，最终都重置会话，迎接下一次录制
+      # 会话重置：无论备份或熔断，均清空状态迎接下一场录制
       log_reset_session
       print_welcome_banner
       
@@ -471,18 +465,26 @@ if [[ "$ENABLE_WEBCLIP" = "true" ]]; then
     if [ $? -eq 0 ]; then
       # 安装成功才打标记，下次重启 grep 到即跳过安装、直接启动服务
       echo "WEBCLIP_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
-      log info "【成功】在线切片依赖安装完毕！"
+      log success "在线切片依赖安装成功"
     else
-      log warn "【错误】在线切片依赖安装失败！"
+      log error "在线切片依赖安装失败"
       exit 1
     fi
   fi
 
-  # 启动服务
-  if [[ -f "/rec/在线切片/app.py" ]]; then
-      log info "启动在线切片服务..."
-      port="${WEBCLIP_PORT:-8186}"
-      uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
+  # 启动服务并确认是否成功
+  if [[ ! -f "/rec/在线切片/app.py" ]]; then
+    log error "在线切片启动失败：缺失 /rec/在线切片/app.py"
+  else
+    log info "正在启动在线切片服务..."
+    port="${WEBCLIP_PORT:-8186}"
+    uvicorn app:app --host 0.0.0.0 --port "$port" --app-dir "/rec/在线切片" > /dev/null 2>&1 &
+    sleep 3
+    if pgrep -f "uvicorn.*app:app" > /dev/null; then
+      log success "在线切片启动成功：端口 $port"
+    else
+      log error "在线切片启动失败：uvicorn进程不存在"
+    fi
   fi
 fi
 EOF
@@ -519,9 +521,9 @@ if [[ "$ENABLE_OPENCC" = "true" ]]; then
     if [ $? -eq 0 ]; then
       # 安装成功才打标记，下次重启 grep 到即跳过安装、直接走模型检查和启动
       echo "SPEECH_INSTALLED=\"$(date '+%Y-%m-%d %H:%M:%S')\"" >> "$STATUS_FILE"
-      log info "【成功】语音识别依赖安装完毕！"
+      log success "语音识别依赖安装成功"
     else
-      log warn "【错误】语音识别依赖安装失败！"
+      log error "语音识别依赖安装失败"
       exit 1
     fi
   fi
@@ -551,20 +553,26 @@ if [[ "$ENABLE_OPENCC" = "true" ]]; then
     wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/preprocessor_config.json"
     wget --continue --timeout=30 -q "$HF_BASE/$REPO/resolve/main/model.bin"
     if [ $? -eq 0 ] && [ -f config.json ] && [ -f model.bin ] && [ -f vocabulary.json ] && [ -f preprocessor_config.json ]; then
-      log info "【成功】模型 $OPENCC_MODEL 下载完毕！"
+      log success "模型 $OPENCC_MODEL 下载成功"
     else
-      log warn "【错误】模型 $OPENCC_MODEL 下载失败，可尝试其他模型或手动下载放到 $MODEL_DIR/$OPENCC_MODEL/"
+      log error "模型 $OPENCC_MODEL 下载失败，可尝试其他模型或手动下载放到 $MODEL_DIR/$OPENCC_MODEL/"
     fi
   fi
 
-  # 模型存在才启动服务
-  if [[ -f "$MODEL_DIR/$OPENCC_MODEL/config.json" ]]; then
-    if [[ -f "/rec/语音识别/app.py" ]]; then
-      log info "启动语音识别服务..."
-      python3 /rec/语音识别/app.py > /dev/null 2>&1 &
-    fi
+  # 启动服务并确认是否成功
+  if [[ ! -f "$MODEL_DIR/$OPENCC_MODEL/config.json" ]]; then
+    log error "语音识别启动失败：模型文件缺失"
+  elif [[ ! -f "/rec/语音识别/app.py" ]]; then
+    log error "语音识别启动失败：缺失 /rec/语音识别/app.py"
   else
-    log warn "模型文件不存在，语音识别服务未启动，请稍后检查模型是否下载成功"
+    log info "正在启动语音识别服务..."
+    python3 /rec/语音识别/app.py > /dev/null 2>&1 &
+    sleep 3
+    if pgrep -f "/rec/语音识别/app.py" > /dev/null; then
+      log success "语音识别启动成功：模型 $OPENCC_MODEL"
+    else
+      log error "语音识别启动失败：进程不存在"
+    fi
   fi
 fi
 EOF
@@ -607,7 +615,18 @@ while true; do
       sleep 3600
     else
       log info "未检测到录制，更新 cookies..."
+      # 存在性检查：脚本缺失则记error并等下一个3点，避免每小时空转
+      if [[ ! -x "/rec/脚本/自动更新cookie.sh" ]]; then
+        log error "cookie更新跳过：缺失/不可执行 /rec/脚本/自动更新cookie.sh"
+        break
+      fi
       /rec/脚本/自动更新cookie.sh
+      COOKIE_RESULT=$?
+      if [[ "$COOKIE_RESULT" -eq 0 ]]; then
+        log success "cookie更新成功"
+      else
+        log error "cookie更新失败：exit=$COOKIE_RESULT"
+      fi
       break
     fi
   done
@@ -630,9 +649,6 @@ else
     log info "当前录播姬密码:"
     log info "$Bililive_PASS"
 fi
-#echo "biliup默认用户名为："
-#echo "biliup"
-#echo "biliup密码需要登录web界面注册"
 
 # 保持容器运行
 tail -f /dev/null

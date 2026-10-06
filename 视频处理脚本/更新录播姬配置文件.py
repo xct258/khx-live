@@ -60,7 +60,7 @@ def main():
     cookie_path_value = conf.get('record_cookie_json') or conf.get('biliup_up_cookies')
     if not cookie_path_value:
         print('[错误] /rec/config.conf 中未设置 record_cookie_json 或 biliup_up_cookies')
-        sys.exit(1)
+        sys.exit(5)
 
     cookie_json_path = Path(cookie_path_value)
     config_json_path = Path('/rec/录播姬/config.json')
