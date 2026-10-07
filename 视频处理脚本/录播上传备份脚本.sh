@@ -32,11 +32,200 @@ should_append_raw_video() {
   [[ "$ENABLE_APPEND_RAW_VIDEO" == "true" ]]
 }
 
-# 未压制视频路由：只追加，不参与新投稿
-enqueue_raw_video() {
-  if should_append_raw_video; then
-    append_files+=("$1")
+# ===================== 按月追加：辅助函数 =====================
+# 从时间戳 2026年10月04日20点01分22秒 提取月份键 2026-10 / 中文 2026年10月
+month_key_from_timestr() {
+  echo "$1" | grep -oE '[0-9]{4}年[0-9]{2}月' | head -1 | sed -E 's/([0-9]{4})年([0-9]{2})月/\1-\2/'
+}
+month_cn_from_timestr() {
+  echo "$1" | grep -oE '[0-9]{4}年[0-9]{2}月' | head -1
+}
+# 从文件名提取完整时间戳，提不到回退 $2
+file_time_from_filename() {
+  local fn="$1" fallback="$2" t
+  t=$(echo "$fn" | grep -oE '[0-9]{4}年[0-9]{2}月[0-9]{2}日[0-9]{2}点[0-9]{2}分[0-9]{2}秒' | head -1)
+  [[ -z "$t" ]] && t="$fallback"
+  echo "$t"
+}
+# 月映射内存缓存：键为 主播|YYYY-MM，值为 VID
+declare -A MONTH_VID_CACHE
+monthly_map_file() {
+  echo "${APPEND_MONTHLY_MAP_FILE:-/rec/data/append_month_vid.map}"
+}
+monthly_map_load() {
+  local map f key val
+  map=$(monthly_map_file)
+  [[ -f "$map" ]] || return 0
+  while IFS='=' read -r key val; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    key=$(echo "$key" | xargs); val=$(echo "$val" | xargs)
+    [[ -n "$key" && -n "$val" ]] && MONTH_VID_CACHE["$key"]="$val"
+  done < "$map"
+}
+monthly_map_get() {
+  echo "${MONTH_VID_CACHE[$1]}"
+}
+monthly_map_set() {
+  local key="$1" vid="$2" map tmp
+  MONTH_VID_CACHE["$key"]="$vid"
+  map=$(monthly_map_file)
+  mkdir -p "$(dirname "$map")"
+  touch "$map"
+  tmp="${map}.tmp.$$"
+  awk -F'=' -v k="$key" '$1!=k' "$map" > "$tmp" 2>/dev/null || cp "$map" "$tmp"
+  echo "${key}=${vid}" >> "$tmp"
+  mv "$tmp" "$map"
+}
+# 将一组已排序文件追加到指定 VID（内部做临时重命名，保证有序）
+# 用法：append_group_to_vid <vid> <start_idx> <文件...>
+append_group_to_vid() {
+  local vid="$1"; shift
+  local start_idx="$1"; shift
+  local files=("$@")
+  local append_src=() append_tmp=()
+  local -A seen_tmp=()
+  local idx=$start_idx f filename ext file_time new_name suffix
+  for f in "${files[@]}"; do
+    [[ ! -f "$f" ]] && continue
+    filename=$(basename "$f")
+    ext="${filename##*.}"
+    file_time=$(file_time_from_filename "$filename" "$start_time")
+    if (( idx == 0 )); then
+      new_name="${file_time}.${ext}"
+    else
+      new_name="${file_time}_${idx}.${ext}"
+    fi
+    suffix=$idx
+    while [[ -e "${cache_dir}/${new_name}" ]] || [[ -n "${seen_tmp[$new_name]}" ]]; do
+      ((suffix++))
+      new_name="${file_time}_${suffix}.${ext}"
+    done
+    seen_tmp[$new_name]=1
+    append_src+=("$f")
+    append_tmp+=("$new_name")
+    log info "追加命名：$filename -> $new_name（第$((idx+1))P -> ${vid}）"
+    ((idx++))
+  done
+  local i
+  for i in "${!append_src[@]}"; do
+    f="${append_src[$i]}"
+    new_name="${append_tmp[$i]}"
+    filename=$(basename "$f")
+    mv "$f" "${cache_dir}/${new_name}"
+    APPEND_START_TS=$(date +%s)
+    append_output=$("$source_backup/biliup/biliup" -u "${biliup_up_cookies}" append --vid "$vid" "${cache_dir}/${new_name}" 2>&1)
+    append_exit=$?
+    APPEND_ELAPSED=$(( $(date +%s) - APPEND_START_TS ))
+    mv "${cache_dir}/${new_name}" "$f"
+    if [[ $append_exit -eq 0 ]] && echo "$append_output" | grep -q "稿件修改成功"; then
+      log success "追加成功（耗时:${APPEND_ELAPSED}s）：$filename -> $new_name -> ${vid}"
+      ((TOTAL_APPEND_OK++))
+      APPEND_SUCCEEDED+=("$f")
+    else
+      log error "追加失败（耗时:${APPEND_ELAPSED}s）：$filename ($new_name -> ${vid})"
+      echo "$append_output" | tail -n 10 | while IFS= read -r l; do log error "[biliup-append] $l"; done
+      ((TOTAL_APPEND_FAIL++))
+      upload_success=false
+    fi
+  done
+}
+# 用首个视频新建月稿件，成功写入映射并存入 $MONTHLY_NEW_VID，失败返回非0
+# 参数：$1=map_key(如 主播|2026-10) $2=标题 $3=简介 $4=首个视频文件路径
+MONTHLY_NEW_VID=""
+monthly_create_vid() {
+  local map_key="$1" title="$2" desc="$3" first_video="$4" out vid
+  MONTHLY_NEW_VID=""
+  log info "按月追加：${map_key} 无映射，用首个视频新建稿件：$(basename "$first_video")"
+  log info "新建稿件标题：$title"
+  log info "新建稿件简介：$desc"
+  cover_args=()
+  if [[ -f "${APPEND_MONTHLY_COVER:-/rec/assets/封面.jpg}" ]]; then
+    cover_args=(--cover "${APPEND_MONTHLY_COVER:-/rec/assets/封面.jpg}")
+    log info "按月追加：使用封面 ${APPEND_MONTHLY_COVER:-/rec/assets/封面.jpg}"
+  else
+    log warn "按月追加：封面不存在，跳过封面上传：${APPEND_MONTHLY_COVER:-/rec/assets/封面.jpg}"
   fi
+  out=$("$source_backup/biliup/biliup" -u "${biliup_up_cookies}" upload \
+    --copyright 2 \
+    "${cover_args[@]}" \
+    --source https://live.bilibili.com/1962720 \
+    --tid 17 \
+    --title "$title" \
+    --desc "$desc" \
+    --tag "直播回放,奶茶猪,娱乐主播" \
+    "$first_video" 2>&1)
+  echo "$out" | tail -n 20 | while IFS= read -r l; do log info "[biliup-upload] $l"; done
+  if ! echo "$out" | grep -q "投稿成功"; then
+    log error "按月追加：新建稿件失败（${map_key}），请检查上面的 biliup 输出"
+    return 1
+  fi
+  vid=$(echo "$out" | grep -oE 'BV[0-9A-Za-z]{10}|av[0-9]+' | head -1)
+  if [[ -z "$vid" ]]; then
+    # 兜底：upload 输出不带 BV 时，用标题反查最新稿件列表
+    log warn "按月追加：输出中无 BV/AV 号，尝试用标题反查：$title"
+    list_out=$("$source_backup/biliup/biliup" -u "${biliup_up_cookies}" list -m 1 2>&1)
+    vid=$(echo "$list_out" | grep -F "$title" | grep -oE 'BV[0-9A-Za-z]{10}|av[0-9]+' | head -1)
+  fi
+  if [[ -z "$vid" ]]; then
+    log error "按月追加：投稿成功但未解析到 BV/AV 号（${map_key}），请从日志手动补写映射文件：$(monthly_map_file)"
+    return 1
+  fi
+  monthly_map_set "$map_key" "$vid"
+  log success "按月追加：新建稿件成功 ${map_key} -> ${vid}"
+  MONTHLY_NEW_VID="$vid"
+  return 0
+}
+
+# 上传已追加视频的配对 XML 到 webdav（覆盖写，按主播/年/月/日期归组）
+# 用法：upload_xml_for_files <YYYY-MM> <视频文件...>
+# 只传追加成功的视频（APPEND_SUCCEDED 内），无配对 xml 则跳过
+upload_xml_for_files() {
+  local mk="$1"; shift
+  # 调用方已在追加块内（ENABLE_APPEND_RAW_VIDEO 开启），此处不再设开关
+  if ! command -v rclone >/dev/null 2>&1; then
+    log warn "按月传XML：未找到 rclone，跳过上传"
+    return 0
+  fi
+  local remote="${RCLONE_XML_REMOTE:-openlist-webdav}"
+  local path_tpl="${RCLONE_XML_PATH_TEMPLATE:-}"
+  if [[ -z "$path_tpl" ]]; then path_tpl='直播录制弹幕/{streamer}/{yyyy}/{mm}/{date}'; fi
+  local f filename xml ft yyyy mm dd date month dest
+  for f in "$@"; do
+    local hit=0 s
+    for s in ${APPEND_SUCCEEDED[@]+"${APPEND_SUCCEEDED[@]}"}; do
+      [[ "$s" == "$f" ]] && { hit=1; break; }
+    done
+    (( hit )) || continue
+    filename=$(basename "$f")
+    xml="${f%.*}.xml"
+    if [[ ! -f "$xml" ]]; then
+      log warn "按月传XML：无配对弹幕文件，跳过：$filename"
+      continue
+    fi
+    ft=$(file_time_from_filename "$filename" "$start_time")
+    yyyy=$(echo "$ft" | sed -E 's/^([0-9]{4})年.*/\1/')
+    mm=$(echo "$ft" | sed -E 's/^[0-9]{4}年([0-9]{2})月.*/\1/')
+    dd=$(echo "$ft" | sed -E 's/^[0-9]{4}年[0-9]{2}月([0-9]{2})日.*/\1/')
+    if [[ -z "$yyyy" || -z "$mm" || -z "$dd" ]]; then
+      log warn "按月传XML：无法解析日期，跳过：$filename"
+      continue
+    fi
+    month="${yyyy}-${mm}"
+    date="${month}-${dd}"
+    subdir=$(echo "$path_tpl" | sed -e "s/{streamer}/${streamer_name}/g" -e "s/{yyyy}/${yyyy}/g" -e "s/{mm}/${mm}/g" -e "s/{dd}/${dd}/g" -e "s/{month}/${month}/g" -e "s/{date}/${date}/g")
+    subdir="${subdir#/}"
+    dest="${remote}:/${subdir}/$(basename "$xml")"
+    rout=$(rclone copyto "$xml" "$dest" 2>&1)
+    rc=$?
+    echo "$rout" | tail -n 3 | while IFS= read -r l; do log info "[rclone-xml] $l"; done
+    if (( rc == 0 )); then
+      log success "XML已传webdav（覆盖）：$(basename "$xml") -> ${yyyy}-${mm}-${dd}/"
+      ((TOTAL_RCLONE_XML_OK++))
+    else
+      log error "XML上传webdav失败：$(basename "$xml")"
+      ((TOTAL_RCLONE_XML_FAIL++))
+    fi
+  done
 }
 
 # 封装的文件大小格式化
@@ -79,7 +268,11 @@ log info "磁盘使用情况 ——$(df -h "$source_backup" 2>/dev/null | awk 'N
 
 # 记录关键配置状态
 log info "配置状态 —— 弹幕压制:${ENABLE_DANMAKU_OVERLAY:-false} 压制模式:${DANMAKU_MODE:-both} 视频上传:${ENABLE_VIDEO_UPLOAD:-false} 网盘备份:${ENABLE_RCLONE_UPLOAD:-false} 自动清理:${ENABLE_CLEANUP:-false} FLV转换:${CONVERT_FLV_TO_MP4:-false} 原版追加:${ENABLE_APPEND_RAW_VIDEO:-false}"
+log info "追加模式: 按月分稿件 月映射: ${APPEND_MONTHLY_MAP_FILE:-/rec/data/append_month_vid.map}"
 log info "保留天数: ${RETENTION_DAYS:-3} 天"
+
+# 加载按月追加映射（不存在则视为空，本次新建后会写回）
+monthly_map_load
 
 # 全局统计
 TOTAL_CLEANED_SMALL=0        # 清理的小视频数量
@@ -96,7 +289,10 @@ TOTAL_APPEND_OK=0            # 追加投稿成功数
 TOTAL_APPEND_FAIL=0          # 追加投稿失败数
 TOTAL_RCLONE_OK=0            # 网盘备份成功数
 TOTAL_RCLONE_FAIL=0          # 网盘备份失败数
+TOTAL_RCLONE_XML_OK=0        # webdav弹幕xml上传成功数
+TOTAL_RCLONE_XML_FAIL=0      # webdav弹幕xml上传失败数
 TOTAL_DELETED_DIRS=0         # 清理删除的目录数
+APPEND_SUCCEEDED=()          # 本次运行追加成功的视频（用于配对xml上传）
 
 # 检查 source_folders 中的文件夹是否存在，不存在则创建,防止脚本报错
 for source_folder in "${source_folders[@]}"; do
@@ -132,8 +328,13 @@ else
     log info "║  完整路径: ${dir}"
     log info "╚══════════════════════════════════════════╝"
 
-    # 清理当前目录中的 txt 日志文件
-    find "$dir" -type f -iname "*.txt" -delete 2>/dev/null
+    # 清理当前目录中的 txt/log 日志文件（计数并记录名称）
+    log_count=$(find "$dir" -type f \( -iname "*.txt" -o -iname "*.log" \) 2>/dev/null | wc -l)
+    if [[ "$log_count" -gt 0 ]]; then
+      log_files=$(find "$dir" -type f \( -iname "*.txt" -o -iname "*.log" \) -printf "%f、" 2>/dev/null | sed 's/、$//')
+      log info "发现 ${log_count} 个日志文件（${log_files}），正在清理"
+      find "$dir" -type f \( -iname "*.txt" -o -iname "*.log" \) -delete 2>/dev/null
+    fi
 
     # 取最早的文件提取元数据（用于确定缓存目录名）
     first_file=$(find "$dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -printf '%T@ %p\n' | sort -n | head -1 | cut -d' ' -f2-)
@@ -156,9 +357,10 @@ else
     moved_count=0
     moved_size=0
     while IFS= read -r -d '' f; do
+      fsize=$(stat -c%s "$f" 2>/dev/null || echo 0)
       mv "$f" "$cache_dir/"
       ((moved_count++))
-      ((moved_size += $(stat -c%s "$f" 2>/dev/null || echo 0)))
+      ((moved_size += fsize))
     done < <(find "$dir" -type f -print0 2>/dev/null)
 
     TOTAL_FILES_MOVED=$((TOTAL_FILES_MOVED + moved_count))
@@ -171,33 +373,51 @@ else
     pre_size=$(dir_video_size "$cache_dir")
     log info "处理前信息 —— 文件数:${pre_count} 视频总大小:$(format_size $pre_size)"
 
-    # --- 第一阶段：极速清理小视频及其关联 XML ---
+    # --- 第一阶段：成组清理（视频+XML 联动，<10MB 整组删，孤儿 XML 单删） ---
+    mapfile -d '' -t temp_files < <(find "$cache_dir" -type f \( -name "*.flv" -o -name "*.mp4" -o -name "*.xml" \) -print0 | sort -z)
+    input_files=()
     clean_count=0
-    while IFS= read -r -d '' video; do
-        ((clean_count++))
-        vsize=$(stat -c%s "$video" 2>/dev/null || echo 0)
-        log info "视频过小 (<10MB): $video (大小:$(format_size $vsize))，执行清理"
-        base_path="${video%.*}"
-        rm -f "$video"
-        ((TOTAL_CLEANED_SMALL++))
-        if [[ -f "${base_path}.xml" ]]; then
-            rm -f "${base_path}.xml"
-            log info "同步删除关联的 XML: ${base_path}.xml"
+    for file in "${temp_files[@]}"; do
+      [[ ! -f "$file" ]] && continue
+      base_path="${file%.*}"
+      ext="${file##*.}"
+      if [[ "$ext" == "xml" ]]; then
+        if [[ -f "${base_path}.mp4" ]]; then vid_file="${base_path}.mp4"
+        elif [[ -f "${base_path}.flv" ]]; then vid_file="${base_path}.flv"
+        else vid_file=""; fi
+      else
+        vid_file="$file"
+      fi
+      if [[ -n "$vid_file" ]]; then
+        vsize=$(stat -c%s "$vid_file" 2>/dev/null || echo 0)
+        if (( vsize < 10485760 )); then
+          log info "关联视频过小 (<10MB)，清理该组文件: $base_path.* (大小:$(format_size $vsize))"
+          rm -f "${base_path}.mp4" "${base_path}.flv" "${base_path}.xml"
+          ((clean_count++))
+          ((TOTAL_CLEANED_SMALL++))
+          continue
         fi
-    done < <(find "$cache_dir" -type f \( -name "*.mp4" -o -name "*.flv" \) -size -10M -print0)
+      else
+        if [[ "$ext" == "xml" ]]; then
+          log info "发现无视频关联的孤儿 XML，执行清理: $file"
+          rm -f "$file"
+          ((clean_count++))
+          continue
+        fi
+      fi
+      input_files+=("$file")
+    done
 
     if [[ $clean_count -gt 0 ]]; then
-      log info "第一阶段完成：共清理 ${clean_count} 个小视频"
+      log info "第一阶段完成：共清理 ${clean_count} 组小文件/孤儿 XML"
     fi
 
-    # --- 第二阶段：读取缓存目录中的有效文件 ---
-    mapfile -t input_files < <(find "$cache_dir" -type f \( -name "*.flv" -o -name "*.mp4" -o -name "*.xml" \) | sort)
-
+    # --- 第二阶段：有效文件确认 ---
     if [[ ${#input_files[@]} -eq 0 ]]; then
-        log info "缓存目录 ${cache_dir} 中已无有效视频，跳过"
+        log info "清理小文件后，${cache_dir} 中已无有效视频，跳过"
         continue
     fi
-    log info "有效文件 ${#input_files[@]} 个"
+    log info "真正剩余有效文件 ${#input_files[@]} 个"
 
     # --- 第三阶段：处理有效的大视频和 XML 的转换 ---
     for file in "${input_files[@]}"; do
@@ -219,16 +439,35 @@ else
 
                 output_file="$cache_dir/${filename}.mp4"
                 log info "转换视频: $(basename "$file") (大小:$(format_size $fsize)) -> $(basename "$output_file")"
-                CONV_START_TS=$(date +%s%N)
-                if ffmpeg -i "$file" -c:v copy -c:a copy -loglevel error -y "$output_file"; then
-                    CONV_ELAPSED=$(( ($(date +%s%N) - CONV_START_TS) / 1000000 ))
+                # 计时兼容：%N 不可用时退回秒级
+                START_RAW=$(date +%s%N 2>/dev/null)
+                if [[ "$START_RAW" == *N ]]; then
+                    CONV_START_TS=$(date +%s)
+                    TIME_UNIT="s"
+                else
+                    CONV_START_TS=$(( START_RAW / 1000000 ))
+                    TIME_UNIT="ms"
+                fi
+                # -fflags +genpts：杜绝转码后音画不同步与首帧黑屏
+                if ffmpeg -fflags +genpts -i "$file" -c:v copy -c:a copy -loglevel error -y "$output_file"; then
+                    END_RAW=$(date +%s%N 2>/dev/null)
+                    if [[ "$TIME_UNIT" == "s" ]]; then
+                        CONV_ELAPSED=$(( $(date +%s) - CONV_START_TS ))
+                    else
+                        CONV_ELAPSED=$(( (END_RAW / 1000000) - CONV_START_TS ))
+                    fi
                     out_size=$(stat -c%s "$output_file" 2>/dev/null || echo 0)
                     rm -f "$file"
-                    log success "转换成功（耗时:${CONV_ELAPSED}ms 输出大小:$(format_size $out_size)），已清理源文件"
+                    log success "转换成功（耗时:${CONV_ELAPSED}${TIME_UNIT} 输出大小:$(format_size $out_size)），已清理源文件"
                     ((TOTAL_CONVERT_OK++))
                 else
-                    CONV_ELAPSED=$(( ($(date +%s%N) - CONV_START_TS) / 1000000 ))
-                    log error "转换失败（耗时:${CONV_ELAPSED}ms）：$file，保留原视频"
+                    END_RAW=$(date +%s%N 2>/dev/null)
+                    if [[ "$TIME_UNIT" == "s" ]]; then
+                        CONV_ELAPSED=$(( $(date +%s) - CONV_START_TS ))
+                    else
+                        CONV_ELAPSED=$(( (END_RAW / 1000000) - CONV_START_TS ))
+                    fi
+                    log error "转换失败（耗时:${CONV_ELAPSED}${TIME_UNIT}）：$file，保留原视频"
                     ((TOTAL_CONVERT_FAIL++))
                 fi
                 ;;
@@ -245,7 +484,6 @@ else
     fi
   done
 fi
-
 
 # 检查是否有需要备份/上传的目录
 if [[ ${#cache_dirs[@]} -eq 0 ]]; then
@@ -312,57 +550,85 @@ else
     log info "上传标题: ${formatted_start_time_4} [${stream_title}]"
 
     # =============================
-    # 预收集：先追加原版视频到指定稿件（在压制之前）
+    # 预收集：按月追加原版视频到月稿件（在压制之前）
     # =============================
     if should_append_raw_video; then
-      if [[ -z "$APPEND_RAW_VIDEO_VID" ]]; then
-        log error "ENABLE_APPEND_RAW_VIDEO 已开启但未配置 APPEND_RAW_VIDEO_VID，跳过追加"
+      # 收集所有非投稿版的原始视频文件
+      for video_file in "${input_files[@]}"; do
+        [[ ! -f "$video_file" ]] && continue
+        filename=$(basename "$video_file")
+        [[ "$filename" == 投稿版-* ]] && continue
+        ext="${filename##*.}"
+        [[ "$ext" != "mp4" && "$ext" != "flv" ]] && continue
+        append_files+=("${cache_dir}/${filename}")
+      done
+
+      if [[ ${#append_files[@]} -eq 0 ]]; then
+        log info "无可追加的原版视频，跳过追加"
       else
-        # 收集所有非投稿版的原始视频文件
-        for video_file in "${input_files[@]}"; do
-          [[ ! -f "$video_file" ]] && continue
-          filename=$(basename "$video_file")
-          [[ "$filename" == 投稿版-* ]] && continue
-          ext="${filename##*.}"
-          [[ "$ext" != "mp4" && "$ext" != "flv" ]] && continue
-          append_files+=("${cache_dir}/${filename}")
-        done
-
-        if [[ ${#append_files[@]} -gt 0 ]]; then
-          log info "开始追加 ${#append_files[@]} 个未压制视频到稿件 ${APPEND_RAW_VIDEO_VID}"
-          # 先为所有文件生成唯一临时名，避免重名
-          declare -A temp_names
-          n=1
-          for f in "${append_files[@]}"; do
-            [[ ! -f "$f" ]] && continue
-            filename=$(basename "$f")
-            ext="${filename##*.}"
-            new_name="${start_time}.${ext}"
-            while [[ -e "${cache_dir}/${new_name}" ]] || [[ -n "${temp_names[$new_name]}" ]]; do
-              new_name="${start_time}_${n}.${ext}"
-              ((n++))
+        # ---------- 按月分稿件追加（整目录按首文件月份归组） ----------
+        mapfile -t sorted_append < <(printf '%s\n' "${append_files[@]}" | sort)
+        # 月份只看本目录首文件：首文件是9月，整组录播就归9月
+        first_append_fn=$(basename "${sorted_append[0]}")
+        first_append_ft=$(file_time_from_filename "$first_append_fn" "$start_time")
+        mk=$(month_key_from_timestr "$first_append_ft")
+        [[ -z "$mk" ]] && mk=$(month_key_from_timestr "$start_time")
+        if [[ -z "$mk" ]]; then
+          log error "按月追加：无法解析月份（首文件：$first_append_fn），本目录跳过"
+          ((TOTAL_APPEND_FAIL+=${#sorted_append[@]}))
+          upload_success=false
+        else
+          group=("${sorted_append[@]}")
+          map_key="${streamer_name}|${mk}"
+          vid=$(monthly_map_get "$map_key")
+          if [[ -n "$vid" ]]; then
+            log info "按月追加：${mk} 共 ${#group[@]} 个文件 -> 既有稿件 ${vid}"
+            append_group_to_vid "$vid" 0 "${group[@]}"
+            upload_xml_for_files "$mk" "${group[@]}"
+          else
+            # 无映射：用组内首个文件新建月稿件，首文件即 P1，不再重复 append
+            month_cn=$(echo "$mk" | sed -E 's/([0-9]{4})-([0-9]{2})/\1年\2月/')
+            title_tpl="${APPEND_MONTHLY_TITLE_TEMPLATE:-}"
+            if [[ -z "$title_tpl" ]]; then title_tpl='{streamer} {month_cn} 直播回放}'; fi
+            new_title=$(echo "$title_tpl" | sed -e "s/{streamer}/${streamer_name}/g" -e "s/{month}/${mk}/g" -e "s/{month_cn}/${month_cn}/g")
+            desc_tpl="${APPEND_MONTHLY_DESC_TEMPLATE:-}"
+            if [[ -z "$desc_tpl" ]]; then desc_tpl='本稿件为{streamer}{month_cn}原版直播回放合集，每次直播追加为一个分P。}'; fi
+            new_desc=$(echo "$desc_tpl" | sed -e "s/{streamer}/${streamer_name}/g" -e "s/{month}/${mk}/g" -e "s/{month_cn}/${month_cn}/g")
+            # 网盘地址占位：{pan_url} = 前缀/{streamer}/{yyyy}/{mm}，中文直写不编码
+            if echo "$new_desc" | grep -q "{pan_url}"; then
+              pan_yyyy=$(echo "$mk" | cut -d- -f1)
+              pan_mm=$(echo "$mk" | cut -d- -f2)
+              pan_url="${RCLONE_XML_PAN_URL:-https://openlist.xct258.top/直播回放弹幕}/${streamer_name}/${pan_yyyy}/${pan_mm}"
+              new_desc=$(echo "$new_desc" | sed -e "s|{pan_url}|$pan_url|g")
+            fi
+            first_f="${group[0]}"
+            first_fn=$(basename "$first_f")
+            first_ext="${first_fn##*.}"
+            first_ft=$(file_time_from_filename "$first_fn" "$start_time")
+            first_tmp="${first_ft}.${first_ext}"
+            suffix=0
+            while [[ -e "${cache_dir}/${first_tmp}" ]]; do
+              ((suffix++))
+              first_tmp="${first_ft}_${suffix}.${first_ext}"
             done
-            temp_names[$new_name]="$f"
-          done
-
-          for new_name in "${!temp_names[@]}"; do
-            f="${temp_names[$new_name]}"
-            filename=$(basename "$f")
-            mv "$f" "${cache_dir}/${new_name}"
-            APPEND_START_TS=$(date +%s)
-            append_output=$("$source_backup/biliup/biliup" -u "${biliup_up_cookies}" append --vid "$APPEND_RAW_VIDEO_VID" "${cache_dir}/${new_name}" 2>&1)
-            append_exit=$?
-            APPEND_ELAPSED=$(( $(date +%s) - APPEND_START_TS ))
-            mv "${cache_dir}/${new_name}" "$f"
-            if [[ $append_exit -eq 0 ]] && echo "$append_output" | grep -q "稿件修改成功"; then
-              log success "追加成功（耗时:${APPEND_ELAPSED}s）：$filename -> ${APPEND_RAW_VIDEO_VID}"
+            mv "$first_f" "${cache_dir}/${first_tmp}"
+            if monthly_create_vid "$map_key" "$new_title" "$new_desc" "${cache_dir}/${first_tmp}"; then
+              new_vid="$MONTHLY_NEW_VID"
+              mv "${cache_dir}/${first_tmp}" "$first_f"
               ((TOTAL_APPEND_OK++))
+              APPEND_SUCCEEDED+=("$first_f")
+              log success "按月追加：首文件已作为新稿件 P1（${new_vid}）：$first_fn -> $first_tmp"
+              if [[ ${#group[@]} -gt 1 ]]; then
+                append_group_to_vid "$new_vid" 1 "${group[@]:1}"
+              fi
+              upload_xml_for_files "$mk" "${group[@]}"
             else
-              log error "追加失败（耗时:${APPEND_ELAPSED}s）：$filename"
-              ((TOTAL_APPEND_FAIL++))
+              mv "${cache_dir}/${first_tmp}" "$first_f"
+              log error "按月追加：${mk} 新建稿件失败，本组 ${#group[@]} 个文件跳过"
+              ((TOTAL_APPEND_FAIL+=${#group[@]}))
               upload_success=false
             fi
-          done
+          fi
         fi
       fi
     fi
@@ -396,19 +662,19 @@ else
             if [[ "$ENABLE_DANMAKU_OVERLAY" != "true" ]]; then
               danmaku_reason="弹幕压制已禁用"
               log warn "弹幕压制已禁用（ENABLE_DANMAKU_OVERLAY=$ENABLE_DANMAKU_OVERLAY），跳过所有检测与压制"
-              enqueue_raw_video "${cache_dir}/${filename}"
+              true # 已清理：预收集已全量追加，此处不再重复入队
             
             # ==================== 2. 启用后，再检查弹幕 XML 是否存在 ====================
             elif [[ ! -f "${cache_dir}/${xml_file}" ]]; then
               danmaku_reason="未检测到弹幕 XML 文件"
               log warn "未检测到弹幕 XML 文件，跳过弹幕压制：${cache_dir}/${xml_file}"
-              enqueue_raw_video "${cache_dir}/${filename}"
+              true # 已清理：预收集已全量追加，此处不再重复入队
 
             # ==================== 3. 存在后，再检查弹幕内容是否符合规则 ====================
             elif ! grep -aEq '^\s*<(d|sc|gift|guard)' "${cache_dir}/${xml_file}"; then
               danmaku_reason="弹幕文件内容为空或不符合预期"
               log warn "弹幕文件内容为空或不符合预期，跳过弹幕压制：${cache_dir}/${xml_file}"
-              enqueue_raw_video "${cache_dir}/${filename}"
+              true # 已清理：预收集已全量追加，此处不再重复入队
 
             else
               danmaku_reason=""
@@ -445,25 +711,25 @@ else
                 # --mode preview-clean:  只生成预览版(无进度条)
                 if python3 /rec/脚本/压制视频.py "${cache_dir}/${xml_file}" --mode "${DANMAKU_MODE:-both}"; then
                   DANMAKU_ELAPSED=$(( $(date +%s) - DANMAKU_START_TS ))
-                  if [[ -f "${cache_dir}/${output_file}" ]]; then
+                  if [[ -s "${cache_dir}/${output_file}" ]]; then
                     out_size=$(stat -c%s "${cache_dir}/${output_file}" 2>/dev/null || echo 0)
                     log success "视频弹幕压制完成（耗时:${DANMAKU_ELAPSED}s 输出大小:$(format_size $out_size)）：$output_file"
                     compressed_files+=("${cache_dir}/${output_file}")
                     ((TOTAL_DANMAKU_OK++))
                   else
                     log error "压制脚本执行成功但未生成目标文件（耗时:${DANMAKU_ELAPSED}s），使用原视频：$filename"
-                    enqueue_raw_video "${cache_dir}/${filename}"
+                    true # 已清理：预收集已全量追加，此处不再重复入队
                     ((TOTAL_DANMAKU_SKIP++))
                   fi
                 else
                   DANMAKU_ELAPSED=$(( $(date +%s) - DANMAKU_START_TS ))
                   log error "视频弹幕压制失败（耗时:${DANMAKU_ELAPSED}s）：$output_file"
-                  enqueue_raw_video "${cache_dir}/${filename}"
+                  true # 已清理：预收集已全量追加，此处不再重复入队
                   ((TOTAL_DANMAKU_SKIP++))
                 fi
               else
                 ((TOTAL_DANMAKU_SKIP++))
-                enqueue_raw_video "${cache_dir}/${filename}"
+                true # 已清理：预收集已全量追加，此处不再重复入队
               fi
             fi # 结束核心条件判断
           fi
@@ -486,7 +752,8 @@ else
 
       if [[ "$ENABLE_VIDEO_UPLOAD" != "true" ]]; then
         log warn "上传已被禁用，跳过投稿步骤（共 ${upload_files_count} 个文件，总计 $(format_size $upload_total_size)）"
-        danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/禁用投稿/压制版/${formatted_start_time_3}/"
+        # 固定落点：禁用投稿也不改目录，保证在线切片/语音识别路径稳定
+        danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
       elif [[ ${#compressed_files[@]} -eq 0 ]]; then
         log warn "没有需要投稿的文件（未压制视频已追加到指定稿件），跳过新投稿"
         danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
@@ -536,8 +803,9 @@ else
           danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
           ((TOTAL_UPLOAD_OK++))
         else
-          log error "投稿失败（耗时:${UPLOAD_ELAPSED}s），请检查"
-          danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/投稿失败/压制版/${formatted_start_time_3}/"
+          log error "投稿失败（耗时:${UPLOAD_ELAPSED}s），状态记入日志，文件仍按固定落点备份，请检查"
+          # 固定落点：投稿失败也不改目录，保证在线切片/语音识别路径稳定
+          danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
           ((TOTAL_UPLOAD_FAIL++))
         fi
       fi
@@ -803,6 +1071,7 @@ log info "  弹幕压制: 成功 ${TOTAL_DANMAKU_OK} / 跳过 ${TOTAL_DANMAKU_SK
 log info "  B站投稿: 成功 ${TOTAL_UPLOAD_OK} / 失败 ${TOTAL_UPLOAD_FAIL}"
 log info "  追加投稿: 成功 ${TOTAL_APPEND_OK} / 失败 ${TOTAL_APPEND_FAIL}"
 log info "  网盘备份: 成功 ${TOTAL_RCLONE_OK} / 失败 ${TOTAL_RCLONE_FAIL}"
+log info "  webdav弹幕: 成功 ${TOTAL_RCLONE_XML_OK} / 失败 ${TOTAL_RCLONE_XML_FAIL}"
 log info "  旧视频清理: ${TOTAL_DELETED_DIRS} 个目录"
 log info "═══════════════════════════════════════════════"
 log info "脚本执行完毕"

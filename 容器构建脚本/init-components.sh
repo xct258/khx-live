@@ -78,12 +78,15 @@ mkdir -p /root/BililiveRecorder
 7zz x /root/tmp/BililiveRecorder-CLI.zip -o/root/BililiveRecorder
 chmod +x /root/BililiveRecorder/BililiveRecorder.Cli
 
-# 下载容器所需脚本
+# 下载容器所需文件
 # 创建相关目录
 mkdir -p /opt/bililive/config /opt/bililive/scripts /opt/bililive/biliup /opt/webclip /opt/webclip/static /opt/webclip/templates /opt/opencc
 
 # 下载日志写入脚本
 wget -O /opt/bililive/scripts/log.sh https://raw.githubusercontent.com/xct258/common/main/脚本工具/shell/日志记录和推送/log.sh
+
+# 下载合集封面
+wget -O /opt/assets/合集封面.jpg https://raw.githubusercontent.com/xct258/khx-live/main/assets/合集封面.jpg
 
 # 下载视频处理相关脚本
 wget -O /opt/bililive/config/config.conf https://raw.githubusercontent.com/xct258/khx-live/main/视频处理脚本/config.conf

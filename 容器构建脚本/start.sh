@@ -131,6 +131,15 @@ if [[ "$ENABLE_INTEL_GPU" = "true" ]]; then
   fi
 fi
 
+# 复制 /opt/assets 到 /rec/assets
+for file in /opt/assets/*; do
+  filename=$(basename "$file")
+  target="/rec/assets/$filename"
+  if [ -f "$file" ] && [ ! -f "$target" ]; then
+    cp "$file" "$target"
+  fi
+done
+
 # 下载私有配置文件（需 GitHub Token）
 if [ -n "$CURRENT_GITHUB_TOKEN" ]; then
 
@@ -387,7 +396,7 @@ while true; do
       
       log info "下播判定：${SCAN_FRESHNESS_MIN}分钟无写入，自检历史文件存在性..."
       
-      # 熔断自检：历史池中只要还有一个文件存在，即正常下播；全消失则是人为删除，放弃备份
+      # 熔断自检：历史池中只要还有一个文件存在，即正常下播；全消失则放弃执行
       ANY_FILE_EXISTS=false
       total_checked=0
       
@@ -410,7 +419,7 @@ while true; do
         if [[ ! -x "/rec/脚本/录播上传备份脚本.sh" ]]; then
           log error "备份脚本缺失/不可执行：/rec/脚本/录播上传备份脚本.sh，跳过本轮"
         else
-          log success "自检通过，触发备份：$BACKUP_LOG"
+          log success "自检通过，触发执行：$BACKUP_LOG"
           /rec/脚本/录播上传备份脚本.sh >> "$BACKUP_LOG" 2>&1 &
           (ls -t "$LOG_DIR"/*.log 2>/dev/null | tail -n +6 | xargs -r rm -f) &
         fi

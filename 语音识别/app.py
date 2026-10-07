@@ -41,7 +41,6 @@ if os.path.exists(CONFIG_PATH):
                 v = line.split("=", 1)[1].strip().strip("'\"")
                 if v:
                     MODEL_NAME = v
-                break
 MODEL_PATH = os.path.join(BASE_DIR, "models", MODEL_NAME)
 GPU_COMPUTE_TYPE = "float16"
 CPU_COMPUTE_TYPE = "int8"
@@ -67,6 +66,9 @@ OUTPUT_PUNCTUATION_PATTERN = re.compile(r"[，,、。！？!?；;\.:：\"'“”
 MERGE_SHORT_GAP = 0.15
 MIN_SEGMENT_DURATION = 0.10
 MAX_FIRST_SECOND_GAP = 0.80
+ENABLE_VAD_SNAP = True
+SNAP_TOLERANCE = 0.10
+SNAP_MIN_GAP = MERGE_SHORT_GAP + 0.01
 
 def add_dll_path(path):
     try:
@@ -104,6 +106,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from faster_whisper import WhisperModel
+try:
+    from faster_whisper.audio import decode_audio
+    from faster_whisper.vad import get_speech_timestamps, VadOptions
+    VAD_SNAP_AVAILABLE = True
+except Exception:
+    VAD_SNAP_AVAILABLE = False
 
 
 # ================= 3. 全局变量与配置 =================
@@ -262,6 +270,78 @@ def merge_text(left, right):
         return left + " " + right
     return left + right
 
+def build_vad_speech_chunks(audio_path, vad_parameters):
+    """用与识别一致的 VAD 参数（去掉 speech_pad）计算真实语音边界，用于吸附结束时间。"""
+    if not (ENABLE_VAD_SNAP and VAD_SNAP_AVAILABLE):
+        return []
+    try:
+        audio = decode_audio(audio_path, sampling_rate=16000)
+    except Exception as e:
+        print(f"[!] VAD 解码失败，跳过结束时间吸附: {e}")
+        return []
+    params = dict(vad_parameters or {})
+    params["speech_pad_ms"] = 0
+    try:
+        options = VadOptions(**params)
+    except Exception:
+        options = VadOptions(
+            threshold=params.get("threshold", 0.35),
+            min_speech_duration_ms=params.get("min_speech_duration_ms", 100),
+            min_silence_duration_ms=params.get("min_silence_duration_ms", 500),
+            speech_pad_ms=0,
+        )
+    try:
+        chunks = get_speech_timestamps(audio, options, sampling_rate=16000)
+    except Exception as e:
+        print(f"[!] VAD 计算失败，跳过结束时间吸附: {e}")
+        return []
+    return [(c["start"] / 16000.0, c["end"] / 16000.0) for c in chunks]
+
+def snap_segments_to_vad(segments, speech_chunks, audio_duration=None):
+    """将每条字幕结束时间吸附到所在语音块的真实结束点（静音起点）。
+
+    只做吸附，不做任何固定补偿：
+    - 语音块结束点位于下一句开始之前时，直接吸附过去；
+    - 若该句处于连续语音中间（下一句紧随其后）或找不到对应语音块，则保持原结束时间不变。
+    """
+    if not segments:
+        return segments
+
+    duration_limit = float(audio_duration) if audio_duration else None
+    result = []
+    total = len(segments)
+
+    for index, seg in enumerate(segments):
+        item = dict(seg)
+        start = float(item["start"])
+        end = float(item["end"])
+        next_start = float(segments[index + 1]["start"]) if index + 1 < total else None
+
+        if next_start is None:
+            limit = duration_limit if duration_limit else float("inf")
+        else:
+            limit = next_start - SNAP_MIN_GAP
+        if duration_limit:
+            limit = min(limit, duration_limit)
+        limit = max(limit, end)
+
+        snapped = None
+        for chunk_start, chunk_end in speech_chunks:
+            if chunk_start - SNAP_TOLERANCE <= end <= chunk_end + SNAP_TOLERANCE:
+                snapped = chunk_end
+                break
+        if snapped is not None and duration_limit:
+            snapped = min(snapped, duration_limit)
+
+        if snapped is not None and end < snapped <= limit:
+            new_end = snapped
+        else:
+            new_end = end
+        item["end"] = round(max(new_end, start + MIN_SEGMENT_DURATION), 2)
+        result.append(item)
+
+    return result
+
 def write_txt_file(txt_path, segments):
     with open(txt_path, "w", encoding="utf-8") as f:
         for item in segments:
@@ -355,6 +435,14 @@ def main_worker():
                 write_log(task_id, tasks_db[task_id])
                 save_db()
                 continue
+
+            # --- VAD 结束时间吸附：用真实静音边界修正 Whisper 结束时间偏早 ---
+            if tasks_db[task_id]["segments"]:
+                speech_chunks = build_vad_speech_chunks(audio_path, TRANSRIBE_PARAMS.get("vad_parameters"))
+                tasks_db[task_id]["segments"] = snap_segments_to_vad(
+                    tasks_db[task_id]["segments"], speech_chunks, audio_duration
+                )
+                save_db()
 
             # --- 文件生成 ---
             duration = time.time() - start_time

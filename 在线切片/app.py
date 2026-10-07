@@ -1,5 +1,6 @@
 import os
 import asyncio
+import bisect
 import json
 import time
 import re
@@ -16,7 +17,7 @@ from urllib.parse import quote
 from typing import List, Optional
 from collections import deque
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Body, Form, File, UploadFile # pyright: ignore[reportMissingImports]
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse # pyright: ignore[reportMissingImports]
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, Response # pyright: ignore[reportMissingImports]
 from fastapi.staticfiles import StaticFiles # pyright: ignore[reportMissingImports]
 from fastapi.templating import Jinja2Templates # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, Field # pyright: ignore[reportMissingImports]
@@ -889,6 +890,91 @@ def _get_video_fps_cached(path: Path) -> float:
     return fps
 
 
+# ------------------ 真实帧时间表（保证前后端一致的时间轴真值） ------------------
+# 容器中每个“可显示帧”的显示时间戳（presentation order, 秒）。
+# 剔除 flags 含 D（discard）的包，使帧数与播放器实际解码/显示的帧一致；
+# 该表同时供后端切片与前端帧号换算使用，确保“前端标记的画面 == 实际切出的画面”。
+_frame_pts_cache: dict = {}
+_frame_pts_lock = threading.Lock()
+
+
+def _probe_frame_pts(path: Path) -> List[float]:
+    try:
+        res = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", str(path)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60.0,
+        )
+        if res.returncode != 0:
+            return []
+        pts = []
+        for line in (res.stdout or "").splitlines():
+            line = line.strip()
+            if not line or line.startswith("N/A"):
+                continue
+            parts = line.split(",")
+            try:
+                t = float(parts[0])
+            except ValueError:
+                continue
+            flags = parts[1] if len(parts) > 1 else ""
+            if "D" in flags:  # 丢弃帧，播放器不会显示
+                continue
+            pts.append(t)
+        return sorted(set(round(t, 6) for t in pts))
+    except Exception:
+        return []
+
+
+def _get_frame_pts_cached(path: Path) -> List[float]:
+    """按 (路径, mtime, size) 缓存帧时间表，避免每次切片都重新探测。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    key = str(path)
+    with _frame_pts_lock:
+        cached = _frame_pts_cache.get(key)
+        if cached and cached[1] == int(st.st_mtime) and abs(cached[2] - float(st.st_size)) < 0.5:
+            return cached[0]
+    pts = _probe_frame_pts(path)
+    with _frame_pts_lock:
+        _frame_pts_cache[key] = (pts, int(st.st_mtime), float(st.st_size))
+    return pts
+
+
+def _nearest_frame_index(pts: List[float], t: float) -> int:
+    if not pts:
+        return 0
+    t = float(t)
+    i = bisect.bisect_left(pts, t)
+    if i <= 0:
+        return 0
+    if i >= len(pts):
+        return len(pts) - 1
+    return i if (pts[i] - t) < (t - pts[i - 1]) else i - 1
+
+
+def _resolve_frame_window(pts: List[float], fps: float, start: float, end: float):
+    """把 [start, end]（含端点，秒，文件 PTS 时间轴）对齐到源视频真实帧。
+
+    返回 (n0, n1, seek_time, end_exclusive_time, frame_count)：
+      - n0/n1 为包含端点端对齐到的可显示帧下标；
+      - seek_time 为 n0 帧的 PTS；end_exclusive_time 为 n1 帧结束（下一帧 PTS）；
+      - frame_count = n1 - n0 + 1。
+    """
+    n0 = _nearest_frame_index(pts, start)
+    n1 = _nearest_frame_index(pts, end)
+    if n1 < n0:
+        n1 = n0
+    seek_time = pts[n0]
+    if n1 + 1 < len(pts):
+        end_exclusive = pts[n1 + 1]
+    else:
+        step = 1.0 / fps if fps and fps > 0 else 0.04
+        end_exclusive = pts[n1] + step
+    return n0, n1, seek_time, end_exclusive, (n1 - n0 + 1)
+
 def _build_thumb_marks(duration: float, step_sec: int) -> list[float]:
     d = max(0.0, float(duration))
     if d <= 0:
@@ -1639,9 +1725,18 @@ async def preview_clip(name: str, start: float, end: float, source_mode: str = "
     fps = _get_video_fps_cached(path)
     if fps <= 0:
         raise HTTPException(status_code=400, detail="无法获取视频帧率(fps)，预览失败")
-    start_frame = int(round(float(start) * fps))
-    end_frame = int(round(float(end) * fps))
-    total_frames = end_frame - start_frame + 1
+
+    # 预览与最终切片使用完全相同的帧对齐逻辑，保证预览 == 成品
+    frame_pts = _get_frame_pts_cached(path)
+    if frame_pts:
+        _, _, seek_time, _end_exclusive, total_frames = _resolve_frame_window(
+            frame_pts, fps, float(start), float(end)
+        )
+    else:
+        start_frame = int(round(float(start) * fps))
+        end_frame = int(round(float(end) * fps))
+        total_frames = end_frame - start_frame + 1
+        seek_time = float(start)
     total_duration = total_frames / fps
 
     cache_key = f"{source_mode}|{target_name}|{start:.6f}|{end:.6f}"
@@ -1650,9 +1745,10 @@ async def preview_clip(name: str, start: float, end: float, source_mode: str = "
 
     if not preview_path.exists():
         cmd = ["ffmpeg", "-y",
-               "-ss", f"{float(start):.6f}",
+               "-ss", f"{max(0.0, float(seek_time) - 0.0005):.6f}",
                "-i", str(path),
                "-frames:v", str(total_frames),
+               "-fps_mode", "passthrough",
                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                "-pix_fmt", "yuv420p",
                "-c:a", "aac", "-b:a", "192k",
@@ -1690,13 +1786,50 @@ def _ffprobe_first_frame_pts(path: Path) -> float:
 
 
 @app.get("/api/video_fps/{name:path}")
-async def video_fps(name: str):
-    path = sanitize_name(name)
+async def video_fps(name: str, source_mode: str = "encode"):
+    try:
+        _, path = _resolve_merge_source_path(name, source_mode)
+    except Exception:
+        path = sanitize_name(name)
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Video not found")
     fps = _ffprobe_fps(path)
     start_pts = _ffprobe_first_frame_pts(path)
-    return {"fps": fps, "start_pts": start_pts}
+    pts = _get_frame_pts_cached(path)
+    frame_count = len(pts)
+    avg_fps = None
+    if frame_count > 1 and pts:
+        span = pts[-1] - pts[0]
+        if span > 0:
+            avg_fps = (frame_count - 1) / span
+    vfr = bool(avg_fps and fps > 0 and abs(avg_fps - fps) / fps > 0.01)
+    return {
+        "fps": fps,
+        "start_pts": start_pts,
+        "frame_count": frame_count,
+        "avg_fps": avg_fps,
+        "vfr": vfr,
+    }
+
+
+@app.get("/api/frame_times/{name:path}")
+async def frame_times(name: str, source_mode: str = "encode"):
+    """返回当前视频“可显示帧”的显示时间戳（float32 小端数组，升序）。
+
+    前端与后端共用同一份帧时间轴，确保前端帧号/范围与后端切出的画面完全一致。
+    使用与合并相同的 source_mode 解析真实源文件。
+    """
+    import struct
+    try:
+        _, path = _resolve_merge_source_path(name, source_mode)
+    except Exception:
+        path = sanitize_name(name)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Video not found")
+    pts = _get_frame_pts_cached(path)
+    buf = struct.pack("<%df" % len(pts), *pts) if pts else b""
+    return Response(content=buf, media_type="application/octet-stream",
+                    headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/api/thumb_manifest")
@@ -2145,6 +2278,7 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
     processed_seconds = 0.0
     done_clips = 0
     metadata_output_cursor = 0.0
+    metadata_output_frame_cursor = 0
     metadata_clips: list[dict] = []
 
     # 运行线程启动时也写入运行态（便于取消时校验/诊断）
@@ -2493,21 +2627,33 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
                 cur_clip_info["status"] = "running"
                 cur_clip_info["progress"] = 0.0
 
-                # 按帧精确计算：起止帧号、总帧数、精确时长
-                start_frame = int(round(float(clip.start) * src_fps))
-                end_frame = int(round(float(clip.end) * src_fps))
-                total_frames = end_frame - start_frame + 1
-                total_duration = total_frames / src_fps
+                # 以源视频“真实帧时间表”为准对齐起止帧，保证与前端标记的画面完全一致
+                clip_pts = _get_frame_pts_cached(src)
+                if clip_pts:
+                    frame_start, frame_end, seek_time, end_exclusive, total_frames = _resolve_frame_window(
+                        clip_pts, src_fps, float(clip.start), float(clip.end)
+                    )
+                    total_duration = max(0.0, end_exclusive - seek_time)
+                else:
+                    # 退化路径（无法探测帧表时）：按帧率四舍五入
+                    frame_start = int(round(float(clip.start) * src_fps))
+                    frame_end = int(round(float(clip.end) * src_fps))
+                    total_frames = frame_end - frame_start + 1
+                    total_duration = total_frames / src_fps if src_fps > 0 else max(0.0, float(clip.end) - float(clip.start))
+                    seek_time = float(clip.start)
                 clip_output_start = metadata_output_cursor
 
                 tmp = TMP_OUTPUT_DIR / f"{job.id}_{vid_idx}_{i}.mkv"
                 if tmp not in temp_files:
                     temp_files.append(tmp)
 
+                # -ss 精确到帧 PTS；-frames:v 精确帧数；
+                # -fps_mode passthrough 防止 VFR 源被丢帧/补帧，确保 1:1 帧对应
                 cmd_seg = ["ffmpeg", "-y",
-                           "-ss", f"{float(clip.start):.6f}",
+                           "-ss", f"{max(0.0, float(seek_time) - 0.0005):.6f}",
                            "-i", str(src),
                            "-frames:v", str(total_frames),
+                           "-fps_mode", "passthrough",
                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
                            "-c:a", "aac", "-b:a", "192k",
                            str(tmp)]
@@ -2544,14 +2690,18 @@ def _run_merge(job: SliceJob, videos: List[VideoClip], out_path: Path, total_sec
                     "source_fps": _round_meta_seconds(src_fps),
                     "source_start": _round_meta_seconds(float(clip.start)),
                     "source_end": _round_meta_seconds(float(clip.end)),
-                    "start_frame": int(start_frame),
-                    "end_frame": int(end_frame),
+                    "frame_start_time": _round_meta_seconds(float(seek_time)),
+                    "start_frame": int(frame_start),
+                    "end_frame": int(frame_end),
                     "frame_count": int(total_frames),
                     "duration": _round_meta_seconds(total_duration),
                     "output_start": _round_meta_seconds(clip_output_start),
                     "output_end": _round_meta_seconds(clip_output_start + float(total_duration)),
+                    "output_frame_start": int(metadata_output_frame_cursor),
+                    "output_frame_end": int(metadata_output_frame_cursor + total_frames - 1),
                 })
                 metadata_output_cursor += float(total_duration)
+                metadata_output_frame_cursor += int(total_frames)
 
                 cur_clip_info["status"] = "done"
                 cur_clip_info["progress"] = 1.0
