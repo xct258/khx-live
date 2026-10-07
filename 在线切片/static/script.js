@@ -2426,10 +2426,17 @@ function __sanitizeVideoTasks(v) {
             const end = Number(c?.end);
             if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
             if (start < 0 || end <= start) continue;
-            clips.push({ start, end });
+            const clip = { start, end };
+            const fs = Number(c?._frameStart);
+            const fe = Number(c?._frameEnd);
+            if (Number.isFinite(fs)) clip._frameStart = fs;
+            if (Number.isFinite(fe)) clip._frameEnd = fe;
+            clips.push(clip);
         }
         if (clips.length === 0) continue;
-        out.push({ name, clips });
+        const taskOut = { name, clips };
+        if (Number.isFinite(Number(item.fps))) taskOut.fps = Number(item.fps);
+        out.push(taskOut);
     }
     return out;
 }
@@ -3573,22 +3580,25 @@ const __DEFAULT_FPS = 30; // fallback when fps unavailable
 
 async function __fetchVideoFps(videoName) {
     try {
-        const res = await fetch(`/api/video_fps/${encodeURIComponent(videoName)}`);
+        const mode = (typeof __getSelectedSourceMode === 'function') ? __getSelectedSourceMode() : 'encode';
+        const res = await fetch(`/api/video_fps/${encodeURIComponent(videoName)}?source_mode=${encodeURIComponent(mode)}`);
         if (!res.ok) return null;
         const data = await res.json();
         const fps = Number(data?.fps);
         const startPts = Number(data?.start_pts) || 0;
-        return (Number.isFinite(fps) && fps > 0) ? { fps, startPts } : null;
+        return (Number.isFinite(fps) && fps > 0) ? { fps, startPts, sourceMode: mode } : null;
     } catch (e) { return null; }
 }
 
 async function __ensureVideoFps() {
     if (!currentVideoName) { __videoFpsCache = null; return __DEFAULT_FPS; }
-    if (__videoFpsCache && __videoFpsCache.name === currentVideoName) return __videoFpsCache.fps;
+    const mode = (typeof __getSelectedSourceMode === 'function') ? __getSelectedSourceMode() : 'encode';
+    if (__videoFpsCache && __videoFpsCache.name === currentVideoName && __videoFpsCache.sourceMode === mode) return __videoFpsCache.fps;
     const info = await __fetchVideoFps(currentVideoName);
     const resolvedFps = (info?.fps) || __DEFAULT_FPS;
     const startPts = (info?.startPts) || 0;
-    __videoFpsCache = { name: currentVideoName, fps: resolvedFps, startPts: startPts };
+    __videoFpsCache = { name: currentVideoName, fps: resolvedFps, startPts: startPts, sourceMode: mode };
+    __ensureFrameTimes();  // 预取共享帧时间表（不阻塞）
     return resolvedFps;
 }
 
@@ -3618,6 +3628,76 @@ async function roundToFrameAsync(seconds) {
 
 function __roundClipTime(seconds) {
     return roundToFrame(seconds, __getVideoFpsSync());
+}
+
+// ---- 共享“帧时间表”：与后端 /api/frame_times 完全一致的时间轴真值 ----
+// 保证前端显示的帧号/范围与后端实际切出的画面一一对应（尤其对 VFR 源）。
+let __frameTimes = null;        // Float32Array：可显示帧的 PTS（升序，秒，文件时间轴）
+let __frameTimesName = null;    // 表对应的视频名
+let __frameTimesMode = null;    // 表对应的 source_mode
+let __frameTimesPromise = null;
+
+async function __ensureFrameTimes() {
+    if (!currentVideoName) { __frameTimes = null; __frameTimesName = null; __frameTimesMode = null; return null; }
+    const mode = (typeof __getSelectedSourceMode === 'function') ? __getSelectedSourceMode() : 'encode';
+    if (__frameTimes && __frameTimesName === currentVideoName && __frameTimesMode === mode) return __frameTimes;
+    if (__frameTimesPromise && __frameTimesName === currentVideoName && __frameTimesMode === mode) return __frameTimesPromise;
+    __frameTimes = null;
+    __frameTimesName = currentVideoName;
+    __frameTimesMode = mode;
+    __frameTimesPromise = (async () => {
+        try {
+            const res = await fetch(`/api/frame_times/${encodeURIComponent(currentVideoName)}?source_mode=${encodeURIComponent(mode)}`, { cache: 'no-store' });
+            if (!res.ok) return null;
+            const buf = await res.arrayBuffer();
+            if (!buf || !buf.byteLength) return null;
+            const arr = new Float32Array(buf);
+            if (arr.length) { __frameTimes = arr; return arr; }
+        } catch (e) { }
+        return null;
+    })();
+    return __frameTimesPromise;
+}
+
+function __getFrameTimesForCurrent() {
+    if (!__frameTimes || __frameTimesName !== currentVideoName || !__frameTimes.length) return null;
+    const mode = (typeof __getSelectedSourceMode === 'function') ? __getSelectedSourceMode() : 'encode';
+    if (__frameTimesMode && __frameTimesMode !== mode) return null;
+    return __frameTimes;
+}
+
+// 时间(秒) -> 最近的可显示帧号（与后端 _nearest_frame_index 完全一致）
+function __timeToFrameIndex(t) {
+    const arr = __getFrameTimesForCurrent();
+    if (!arr) return null;
+    const x = Number(t);
+    if (!Number.isFinite(x)) return null;
+    let lo = 0, hi = arr.length - 1;
+    if (x <= arr[0]) return 0;
+    if (x >= arr[hi]) return hi;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (arr[mid] < x) lo = mid + 1; else hi = mid;
+    }
+    const a = arr[lo], b = arr[lo - 1];
+    return (a - x) < (x - b) ? lo : lo - 1;
+}
+
+// 帧号 -> 该帧的显示时间(秒，文件时间轴)
+function __frameIndexToTime(i) {
+    const arr = __getFrameTimesForCurrent();
+    if (!arr) return null;
+    const idx = Math.max(0, Math.min(arr.length - 1, i | 0));
+    return arr[idx];
+}
+
+// 把任意时间吸附到最近的真实帧 PTS，使片段边界落在帧上；无帧表时退化为毫秒取整。
+function __snapTimeToFrame(t) {
+    const arr = __getFrameTimesForCurrent();
+    if (!arr) return roundToMs(t);
+    const idx = __timeToFrameIndex(t);
+    if (idx == null) return roundToMs(t);
+    return __frameIndexToTime(idx);
 }
 
 function __getFrameInterval() {
@@ -3676,7 +3756,7 @@ function _parseTimeStr(str) {
 function parseTime(str) {
     const total = _parseTimeStr(str);
     if (!Number.isFinite(total)) return NaN;
-    return __roundClipTime(total);
+    return __snapTimeToFrame(total);
 }
 
 function parseTimeSub(str) {
@@ -4599,10 +4679,16 @@ function renderNewClipList() {
             if (c._frameStart != null && c._frameEnd != null) {
                 frameText = `#${c._frameStart}→${c._frameEnd}`;
             } else {
-                const fps = __getVideoFpsSync();
-                const sf = fps > 0 ? Math.round(c.start * fps) : null;
-                const ef = fps > 0 ? Math.round(c.end * fps) : null;
-                if (sf !== null && ef !== null) frameText = `#${sf}→${ef}`;
+                const sfIdx = __timeToFrameIndex(c.start);
+                const efIdx = __timeToFrameIndex(c.end);
+                if (sfIdx != null && efIdx != null) {
+                    frameText = `#${sfIdx}→${efIdx}`;
+                } else {
+                    const fps = __getVideoFpsSync();
+                    const sf = fps > 0 ? Math.round(c.start * fps) : null;
+                    const ef = fps > 0 ? Math.round(c.end * fps) : null;
+                    if (sf !== null && ef !== null) frameText = `#${sf}→${ef}`;
+                }
             }
             if (frameText) {
                 const frameEl = document.createElement('span');
@@ -5116,11 +5202,51 @@ function __stopRvfcLoop() {
     __rvfcLastMediaTime = null;
 }
 
+// 当前“已实际显示帧”的 mediaTime（优先），无 RVFC 时回退到 currentTime。
+// 用它与设定终点比较，避免 currentTime 先行（解码/缓冲领先）导致的提前停止。
+function __currentPresentedTime() {
+    if (__rvfcActive && __rvfcLastMediaTime != null) return __rvfcLastMediaTime;
+    return Number(player && player.currentTime) || 0;
+}
+
+// “预览全部”模态框使用的是独立的 <video id="allPreviewPlayer">，
+// 不能用主播放器的 presented time，需单独跟踪该元素的已显示帧时间。
+let __allModalMediaPresented = null;
+let __allModalRvfcBoundMedia = null;
+
+function __bindAllModalPresented(media) {
+    __allModalMediaPresented = null;
+    if (!media || typeof media.requestVideoFrameCallback !== 'function') return;
+    if (__allModalRvfcBoundMedia === media) return;
+    __allModalRvfcBoundMedia = media;
+    const cb = (now, meta) => {
+        __allModalMediaPresented = meta.mediaTime;
+        media.requestVideoFrameCallback(cb);
+    };
+    media.requestVideoFrameCallback(cb);
+}
+
 // ------------------ 片段预览（播放切片成品，100% 一致） ------------------
 
 function __getSelectedSourceMode() {
     return document.querySelector('input[name="sourceMode"]:checked')?.value || 'encode';
 }
+
+// source_mode 切换后帧时间表/fps 需要重新解析（不同源可能帧不同）
+(function __bindSourceModeChange() {
+    try {
+        document.querySelectorAll('input[name="sourceMode"]').forEach(function (el) {
+            el.addEventListener('change', function () {
+                __frameTimes = null;
+                __frameTimesName = null;
+                __frameTimesMode = null;
+                __frameTimesPromise = null;
+                __videoFpsCache = null;
+                if (typeof __ensureVideoFps === 'function') __ensureVideoFps().catch(function () { });
+            });
+        });
+    } catch (e) { }
+})();
 
 function __buildMergeVideosPayload() {
     return (videoTasks || []).filter(v => Array.isArray(v?.clips) && v.clips.length > 0)
@@ -5170,15 +5296,17 @@ function __previewClip(name, start, end, label) {
 function __getCurrentPlayTime() {
     if (__framePlayerActive && __framePlayer && __framePlayer.ready) {
         const fn = __framePlayer.currentFrame;
-        return { time: fn / __framePlayer.fps, frame: fn, fps: __framePlayer.fps, t: fn / __framePlayer.fps };
+        const ft = __frameIndexToTime(fn);
+        const tt = (ft != null) ? ft : (fn / __framePlayer.fps);
+        return { time: tt, frame: fn, fps: __framePlayer.fps, t: tt };
     }
     const fps = __getVideoFpsSync() || 30;
     const startPts = __getStartPts();
     const t = (__rvfcActive && __rvfcLastMediaTime != null) ? __rvfcLastMediaTime : player.currentTime;
-    const fn = fps > 0 ? Math.round(Math.max(0, t - startPts) * fps) : null;
-    // time = 文件原始 PTS（带偏移，供 ffmpeg -ss 使用）
-    // frame = 内容帧号（扣掉偏移，供显示使用）
-    return { time: __roundClipTime(t), frame: fn, fps: fps, t: t };
+    const frameIdx = __timeToFrameIndex(t);
+    const fn = (frameIdx != null) ? frameIdx : (fps > 0 ? Math.round(Math.max(0, t - startPts) * fps) : null);
+    // time = 文件原始 PTS（帧精确，供 ffmpeg -ss 与后端帧表使用）
+    return { time: __snapTimeToFrame(t), frame: fn, fps: fps, t: t };
 }
 
 // 更新输入框显示
@@ -5213,7 +5341,7 @@ function handleManualTimeInput(e, isStart) {
 
     const sec = parseTime(val);
     if (Number.isFinite(sec)) {
-        const rounded = __roundClipTime(sec);
+        const rounded = __snapTimeToFrame(sec);
         if (isStart) tempStart = rounded;
         else tempEnd = rounded;
         e.target.style.borderColor = 'var(--accent-color)';
@@ -5297,6 +5425,7 @@ if (setEndBtn) {
 // ---- 添加片段核心逻辑（W键和Add按钮共用）----
 async function __doAddClip({ silent = false } = {}) {
     await __ensureVideoFps();
+    await __ensureFrameTimes();
     if (__isClipEditLocked()) {
         showAlertModal('当前正在切片或已有合并任务排队，无法添加片段');
         return false;
@@ -5309,8 +5438,8 @@ async function __doAddClip({ silent = false } = {}) {
         if (!silent) showToast('请先设定起点和终点');
         return false;
     }
-    const newStart = __roundClipTime(Math.min(tempStart, tempEnd));
-    const newEnd = __roundClipTime(Math.max(tempStart, tempEnd));
+    const newStart = __snapTimeToFrame(Math.min(tempStart, tempEnd));
+    const newEnd = __snapTimeToFrame(Math.max(tempStart, tempEnd));
     if (newEnd <= newStart) {
         if (!silent) showToast('终点时间必须大于起点时间');
         return false;
@@ -5340,7 +5469,12 @@ async function __doAddClip({ silent = false } = {}) {
     }
 
     const clipObj = { start: newStart, end: newEnd };
-    if (tempStartFrame != null && tempEndFrame != null) {
+    const sfIdx = __timeToFrameIndex(newStart);
+    const efIdx = __timeToFrameIndex(newEnd);
+    if (sfIdx != null && efIdx != null) {
+        clipObj._frameStart = Math.min(sfIdx, efIdx);
+        clipObj._frameEnd = Math.max(sfIdx, efIdx);
+    } else if (tempStartFrame != null && tempEndFrame != null) {
         clipObj._frameStart = Math.min(tempStartFrame, tempEndFrame);
         clipObj._frameEnd = Math.max(tempStartFrame, tempEndFrame);
     }
@@ -5410,6 +5544,9 @@ let __allModalRafId = null;
 let __allModalUserPaused = false;
 let __allModalCumulative = []; // cumulative offset of each clip's start within total timeline
 let __allModalTotalDur = 0;
+let __allModalFinished = false; // 整段片段列表播放完毕
+let __allModalSingleClip = false; // 只播放单条片段（点列表里的 ▶ / 行）
+let __allModalProgrammaticPlay = false; // 程序性起播（seek 期间硬兜底不应介入）
 
 function __buildAllModalCumulative(clips) {
     const cum = [];
@@ -5450,6 +5587,7 @@ function __seekAllModalToGlobal(pct) {
         __playAllModalClip(clipIdx, token, localOffset);
     } else {
         media.currentTime = clip.start + localOffset;
+        __allModalMediaPresented = null;  // 清除旧帧时间，避免拖动后误判到点
         __syncAllModalProgress();
     }
 }
@@ -5495,21 +5633,39 @@ function __setAllModalPlaying(playing) {
 
 function __toggleAllModalPlay() {
     const clips = __allModalPlaybackClips;
-    if (!clips) return;
+    if (!clips || !clips.length) return;
     const player = document.getElementById('allPreviewPlayer');
     const audio = document.getElementById('allPreviewAudio');
-    const useVideo = __isVideoPreviewActive();
-    const media = useVideo ? player : audio;
+    const media = __isVideoPreviewActive() ? player : audio;
     if (!media) return;
-    if (media.paused) {
-        __allModalUserPaused = false;
-        media.play().catch(() => {});
-        __setAllModalPlaying(true);
-    } else {
+
+    if (!media.paused) {
+        // 暂停
         __allModalUserPaused = true;
         media.pause();
         __setAllModalPlaying(false);
+        return;
     }
+
+    // 恢复播放：永远只在“当前片段”范围内，绝不播放到其它位置
+    __allModalUserPaused = false;
+    const idx = __allModalPlaybackIndex;
+    const clip = clips[idx];
+    const t = Number(media.currentTime) || 0;
+
+    if (__allModalFinished || idx < 0 || !clip) {
+        // 已播完：单条模式重播该条；顺序模式从第一条重新开始
+        __allModalFinished = false;
+        __playAllModalClip((__allModalSingleClip && idx >= 0) ? idx : 0, __allModalPlaybackToken, 0);
+        return;
+    }
+    if (t < clip.start || t >= clip.end) {
+        // 播放头落在片段之外 → 从该片段开头重播
+        __playAllModalClip(idx, __allModalPlaybackToken, 0);
+        return;
+    }
+    // 片段内继续：以片段内偏移重新进入（会重置监控循环，保证到点即停）
+    __playAllModalClip(idx, __allModalPlaybackToken, Math.max(0, t - clip.start));
 }
 
 function __openAllPreviewModal() {
@@ -5533,6 +5689,8 @@ function __openAllPreviewModal() {
     __allModalPlaybackClips = clips;
     __allModalPlaybackIndex = -1;
     __allModalUserPaused = false;
+    __allModalSingleClip = false;  // 打开预览 → 默认顺序播放全部片段
+    __allModalFinished = false;
     const { cum, total } = __buildAllModalCumulative(clips);
     __allModalCumulative = cum;
     __allModalTotalDur = total;
@@ -5591,9 +5749,42 @@ function __openAllPreviewModal() {
             const item = document.createElement('div');
             item.className = 'all-preview-clip-item';
             item.dataset.apIdx = String(i);
+            item.style.display = 'flex';
+            item.style.alignItems = 'center';
+            item.style.gap = '10px';
+            item.title = '点击只播放此片段';
             const dur = Math.max(0, c.end - c.start);
-            item.innerHTML = '<span class="apci-idx">片段' + groupIdx + '</span>'
-                + '<span class="apci-time">' + formatSubtitleTime(c.start) + ' – ' + formatSubtitleTime(c.end) + '</span>';
+
+            const idxEl = document.createElement('span');
+            idxEl.className = 'apci-idx';
+            idxEl.textContent = '片段' + groupIdx;
+
+            const playBtn = document.createElement('button');
+            playBtn.type = 'button';
+            playBtn.textContent = '▶';
+            playBtn.title = '只播放此片段';
+            playBtn.style.cssText = 'flex:0 0 auto;width:22px;height:22px;border-radius:50%;border:1px solid var(--border-color);background:transparent;color:var(--fg-color);cursor:pointer;font-size:10px;line-height:1;padding:0;';
+            playBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                __allModalUserPaused = false;
+                __allModalSingleClip = true;  // 只播这一条，播完即停
+                __playAllModalClip(i, __allModalPlaybackToken, 0);
+            });
+
+            const timeEl = document.createElement('span');
+            timeEl.className = 'apci-time';
+            timeEl.style.flex = '1 1 auto';
+            timeEl.textContent = formatSubtitleTime(c.start) + ' – ' + formatSubtitleTime(c.end);
+
+            const durEl = document.createElement('span');
+            durEl.style.cssText = 'flex:0 0 auto;font-size:11px;opacity:0.6;font-variant-numeric:tabular-nums;';
+            durEl.textContent = __formatModalMediaTime(dur);
+
+            item.appendChild(idxEl);
+            item.appendChild(playBtn);
+            item.appendChild(timeEl);
+            item.appendChild(durEl);
+            item.addEventListener('click', function () { __allModalUserPaused = false; __allModalSingleClip = true; __playAllModalClip(i, __allModalPlaybackToken, 0); });
             currentBody.appendChild(item);
         });
         listEl.replaceChildren(frag);
@@ -5608,6 +5799,7 @@ async function __playAllModalClip(index, token, seekOffset) {
     const clips = __allModalPlaybackClips;
     if (!clips || token !== __allModalPlaybackToken) return;
 
+    __allModalFinished = false;
     if (__allModalRafId) { cancelAnimationFrame(__allModalRafId); __allModalRafId = null; }
 
     const player = document.getElementById('allPreviewPlayer');
@@ -5617,15 +5809,20 @@ async function __playAllModalClip(index, token, seekOffset) {
 
     if (index >= clips.length) {
         // reached end — stop, don't close
+        __allModalFinished = true;
         if (loading) loading.classList.remove('show');
         if (progress) progress.textContent = `播放完毕  ${clips.length}/${clips.length}`;
         __setAllModalPlaying(false);
         const listEl = document.getElementById('allPreviewClipList');
         if (listEl) listEl.querySelectorAll('.all-preview-clip-item.active').forEach(el => el.classList.remove('active'));
-        // pause media
+        // pause media 并精确停在最后一条片段的结束帧
         const useVideo = __isVideoPreviewActive();
         const m = useVideo ? player : audio;
-        if (m) try { m.pause(); } catch (e) {}
+        const lastClip = clips[clips.length - 1];
+        if (m) {
+            try { m.pause(); } catch (e) {}
+            if (lastClip) { try { m.currentTime = lastClip.end; } catch (e) {} }
+        }
         return;
     }
 
@@ -5660,6 +5857,7 @@ async function __playAllModalClip(index, token, seekOffset) {
 
     const useVideo = __isVideoPreviewActive();
     const media = useVideo ? player : audio;
+    if (media) { try { media.pause(); } catch (e) { } }  // 只播片段：先停住，绝不延续上一位置
     const url = useVideo
         ? '/api/video/' + encodeURIComponent(clip.name)
         : '/api/audio/' + encodeURIComponent(clip.name);
@@ -5715,19 +5913,33 @@ async function __playAllModalClip(index, token, seekOffset) {
     // seek: start + optional offset
     const seekTarget = clip.start + (seekOffset || 0);
     try { media.currentTime = seekTarget; } catch (e) { }
+    __bindAllModalPresented(media);  // 跟踪该模态播放器实际显示的帧
+    __allModalProgrammaticPlay = true;
     try { await media.play(); } catch (e) {
+        __allModalProgrammaticPlay = false;
         if (token !== __allModalPlaybackToken) return;
         showToast('播放失败', 'error');
         __closeAllPreviewModal();
         return;
     }
+    setTimeout(function () { __allModalProgrammaticPlay = false; }, 0);
 
     __syncAllModalProgress();
 
     // monitor until end time
     const token2 = token;
     const endTime = clip.end;
-    const onEnded = () => { if (token2 === __allModalPlaybackToken) __playAllModalClip(index + 1, token2); };
+    const onEnded = () => {
+        if (token2 !== __allModalPlaybackToken) return;
+        if (__allModalSingleClip) {
+            // 单条模式：播完即停
+            __allModalFinished = true;
+            __setAllModalPlaying(false);
+            __syncAllModalProgress();
+            return;
+        }
+        __playAllModalClip(index + 1, token2);
+    };
     media.addEventListener('ended', onEnded, { once: true });
 
     // resume from user pause
@@ -5739,8 +5951,20 @@ async function __playAllModalClip(index, token, seekOffset) {
     const checkTime = () => {
         if (token2 !== __allModalPlaybackToken) { __allModalRafId = null; return; }
         __syncAllModalProgress();
-        if (!__allModalUserPaused && (media.currentTime || 0) >= endTime - 0.1) {
+        const presented = (__allModalMediaPresented != null)
+            ? __allModalMediaPresented
+            : (Number(media.currentTime) || 0);
+        if (!__allModalUserPaused && presented >= endTime) {
             media.removeEventListener('ended', onEnded);
+            try { media.pause(); } catch (e) { }  // 到达片段终点立即停住，绝不越界播放
+            try { media.currentTime = clip.end; } catch (e) { }  // 精确吸附到结束帧，避免多播几帧
+            if (__allModalSingleClip) {
+                // 单条模式：播完即停，不跳下一条
+                __allModalFinished = true;
+                __setAllModalPlaying(false);
+                __syncAllModalProgress();
+                return;
+            }
             __playAllModalClip(index + 1, token2);
             return;
         }
@@ -5767,6 +5991,49 @@ function __closeAllPreviewModal() {
     overlay.setAttribute('aria-hidden', 'true');
 }
 
+// ── 硬性兜底：任何情况下都不允许播放到当前片段之外 ──
+// 即使有其它代码/浏览器行为直接在越界位置触发 play，也会被拉回片段内；
+// 若监控循环未运行（例如整段播完后）却仍在播放，会硬停并推进。
+function __allModalHardGuard(media) {
+    if (!media || media.__clipGuardBound) return;
+    media.__clipGuardBound = true;
+    media.addEventListener('play', function () {
+        if (__allModalProgrammaticPlay || media.seeking) return;  // 程序性起播/seek 中不介入
+        if (!__allModalPlaybackClips || __allModalPlaybackIndex < 0) return;
+        const clip = __allModalPlaybackClips[__allModalPlaybackIndex];
+        if (!clip) return;
+        const t = Number(media.currentTime) || 0;
+        if (t < clip.start || t >= clip.end) {
+            __allModalUserPaused = false;
+            __playAllModalClip(__allModalPlaybackIndex, __allModalPlaybackToken, 0);
+        }
+    });
+    media.addEventListener('timeupdate', function () {
+        if (!__allModalPlaybackClips || __allModalPlaybackIndex < 0) return;
+        if (media.paused || __allModalUserPaused) return;
+        const clip = __allModalPlaybackClips[__allModalPlaybackIndex];
+        if (!clip) return;
+        const t = Number(media.currentTime) || 0;
+        if (!__allModalRafId) {
+            if (t >= clip.end) {
+                try { media.pause(); } catch (e) { }
+                try { media.currentTime = clip.end; } catch (e) { }  // 精确停在结束帧
+                if (__allModalSingleClip) {
+                    __allModalFinished = true;
+                    __setAllModalPlaying(false);
+                    __syncAllModalProgress();
+                } else {
+                    __playAllModalClip(__allModalPlaybackIndex + 1, __allModalPlaybackToken, 0);
+                }
+            } else if (t < clip.start) {
+                try { media.currentTime = clip.start; } catch (e) { }
+            }
+        }
+    });
+}
+__allModalHardGuard(document.getElementById('allPreviewPlayer'));
+__allModalHardGuard(document.getElementById('allPreviewAudio'));
+
 // close handlers
 document.getElementById('allPreviewClose')?.addEventListener('click', __closeAllPreviewModal);
 document.getElementById('allPreviewOverlay')?.addEventListener('click', (e) => {
@@ -5781,12 +6048,11 @@ if (__allPreviewBar) {
         __seekAllModalToGlobal(Number(this.value));
     });
     __allPreviewBar.addEventListener('change', function () {
-        __allModalUserPaused = false;
-        __setAllModalPlaying(true);
+        // 拖动结束后：只有当前处于暂停态才重新开始播放（走片段安全逻辑）
         const player = document.getElementById('allPreviewPlayer');
         const audio = document.getElementById('allPreviewAudio');
         const media = __isVideoPreviewActive() ? player : audio;
-        if (media) media.play().catch(() => {});
+        if (media && media.paused) __toggleAllModalPlay();
     });
 }
 // click on progress wrap (for easier seeking)
@@ -5795,14 +6061,13 @@ if (__allPreviewWrap) {
     __allPreviewWrap.addEventListener('click', function (e) {
         if (e.target.closest('.all-preview-progress-bar')) return;
         const rect = this.getBoundingClientRect();
+        if (!rect.width) return;
         const pct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
         __seekAllModalToGlobal(pct);
-        __allModalUserPaused = false;
-        __setAllModalPlaying(true);
         const player = document.getElementById('allPreviewPlayer');
         const audio = document.getElementById('allPreviewAudio');
         const media = __isVideoPreviewActive() ? player : audio;
-        if (media) media.play().catch(() => {});
+        if (media && media.paused) __toggleAllModalPlay();
     });
 }
 
@@ -8022,6 +8287,7 @@ async function __playAllVideoClipAt(index, token) {
     };
 
     __seekPrecise(startTime);
+    __rvfcLastMediaTime = null;  // 清除旧位置，避免用上一个位置的时间提前结束
     __allPreviewLoading = true;
     __syncAllPreviewButton();
     showToast('正在加载预览片段…', 'info', 1200);
@@ -8040,11 +8306,12 @@ async function __playAllVideoClipAt(index, token) {
     }
     player.play().then(() => {
         if (token !== __allPlaybackToken || !__allPlaybackClips) return;
+        // 兜底定时器仅用于卡死时兜底，额外留余量，正常由下面的 raf 精确判断结束
         const duration = Math.max(0, endTime - (Number(player.currentTime) || startTime));
-        __allPlaybackTimeoutId = setTimeout(advance, duration * 1000);
+        __allPlaybackTimeoutId = setTimeout(advance, duration * 1000 + 1500);
         (function rafLoop() {
             if (token !== __allPlaybackToken || !__allPlaybackClips) return;
-            if ((Number(player.currentTime) || 0) >= endTime) {
+            if (__currentPresentedTime() >= endTime) {
                 advance();
                 return;
             }
@@ -8065,18 +8332,21 @@ async function __playClipRange(start, end, videoName) {
     __stopInlineClipPlayback();
     if (__framePlayerActive && __framePlayer && __framePlayer.ready) {
         const fps = __framePlayer.fps;
-        const startFrame = Math.round(start * fps);
-        const endFrame = Math.round(end * fps);
-        __framePlayer.play(startFrame, Math.max(startFrame, endFrame - 1));
+        const sIdx = __timeToFrameIndex(start);
+        const eIdx = __timeToFrameIndex(end);
+        const startFrame = (sIdx != null) ? sIdx : Math.round(start * fps);
+        const endFrame = (eIdx != null) ? eIdx : Math.round(end * fps);
+        __framePlayer.play(startFrame, Math.max(startFrame, endFrame));
         return;
     }
     const token = ++__inlinePlayToken;
-    const fps = __getVideoFpsSync() || 30;
     __seekPrecise(start);
+    __rvfcLastMediaTime = null;  // 清除旧位置，避免用上一个位置的时间提前结束
     var stopInlineVideoSegment = function () {
         if (token !== __inlinePlayToken) return;
         __clearVideoSegmentEnd();
-        player.pause();
+        try { player.pause(); } catch (e) { }
+        try { player.currentTime = end; } catch (e) { }  // 精确停在结束帧
     };
     __videoSegmentPlaybackStarted = false;
     __videoSegmentFailHandler = function () {
@@ -8088,7 +8358,7 @@ async function __playClipRange(start, end, videoName) {
     }).catch(() => {});
     (function raf() {
         if (token !== __inlinePlayToken) return;
-        if (player.currentTime >= end - 1 / fps) {
+        if (__currentPresentedTime() >= end) {
             stopInlineVideoSegment();
             return;
         }
@@ -8207,6 +8477,7 @@ async function __playSubtitleSegment(idx, start, end) {
         __audioSegmentEnd = end;
         __clearVideoSegmentEnd();
         __seekPrecise(start);
+        __rvfcLastMediaTime = null;  // 清除旧位置，避免提前结束
         var segToken = ++__audioPlaybackToken;
         var segEnd = end;
         var segIdx = idx;
@@ -8243,10 +8514,10 @@ async function __playSubtitleSegment(idx, start, end) {
             if (segToken !== __audioPlaybackToken || __audioPlayingIndex !== segIdx) return;
             __videoSegmentPlaybackStarted = true;
             var duration = Math.max(0, segEnd - (Number(player.currentTime) || start));
-            __videoSegmentTimeoutId = setTimeout(stopVideoSegment, duration * 1000);
+            __videoSegmentTimeoutId = setTimeout(stopVideoSegment, duration * 1000 + 1500);
             (function rafLoop() {
                 if (segToken !== __audioPlaybackToken || __audioPlayingIndex !== segIdx) return;
-                if ((Number(player.currentTime) || 0) >= segEnd) {
+                if (__currentPresentedTime() >= segEnd) {
                     stopVideoSegment();
                     return;
                 }
@@ -9769,10 +10040,10 @@ document.addEventListener('keydown', (e) => {
 
     // ---- 写 tempStart / tempEnd ----
     function _applyStart(t) {
-        try { tempStart = __roundClipTime(Math.max(0, Math.min(t, _tlDur()))); if (typeof updateClipInputs === 'function') updateClipInputs(); } catch (e) { }
+        try { tempStart = __snapTimeToFrame(Math.max(0, Math.min(t, _tlDur()))); if (typeof updateClipInputs === 'function') updateClipInputs(); } catch (e) { }
     }
     function _applyEnd(t) {
-        try { tempEnd = __roundClipTime(Math.max(0, Math.min(t, _tlDur()))); if (typeof updateClipInputs === 'function') updateClipInputs(); } catch (e) { }
+        try { tempEnd = __snapTimeToFrame(Math.max(0, Math.min(t, _tlDur()))); if (typeof updateClipInputs === 'function') updateClipInputs(); } catch (e) { }
     }
 
     function _tlClipKey(taskName, clip, clipIndex) {
@@ -9806,9 +10077,8 @@ document.addEventListener('keydown', (e) => {
         const state = __tlSelectedPlayback;
         const cur = state.clips[state.index];
         if (!cur) { _tlStopSelectedPlayback(); return; }
-        const now = Number(player.currentTime) || 0;
-        const fps = __getVideoFpsSync() || 30;
-        if (now < cur.end - 1 / fps) return;
+        const now = __currentPresentedTime();
+        if (now < cur.end) return;
 
         if (state.index < state.clips.length - 1) {
             state.index += 1;
@@ -10353,8 +10623,8 @@ document.addEventListener('keydown', (e) => {
         const jumpStartBtn = document.createElement('button');
         jumpStartBtn.className = 'tl-btn';
         jumpStartBtn.type = 'button';
-        jumpStartBtn.textContent = '⤒D';
-        jumpStartBtn.title = '从起点播放（选中片段则用片段起点） [D]';
+        jumpStartBtn.textContent = '⤒F';
+        jumpStartBtn.title = '从起点播放（选中片段则用片段起点） [F]';
         jumpStartBtn.disabled = !canTimelineInteract;
         jumpStartBtn.addEventListener('click', () => {
             const sel = _tlGetSelectedClipsSorted();
