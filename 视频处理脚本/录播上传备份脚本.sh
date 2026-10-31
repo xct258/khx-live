@@ -270,6 +270,7 @@ log info "磁盘使用情况 ——$(df -h "$source_backup" 2>/dev/null | awk 'N
 log info "配置状态 —— 弹幕压制:${ENABLE_DANMAKU_OVERLAY:-false} 压制模式:${DANMAKU_MODE:-both} 视频上传:${ENABLE_VIDEO_UPLOAD:-false} 网盘备份:${ENABLE_RCLONE_UPLOAD:-false} 自动清理:${ENABLE_CLEANUP:-false} FLV转换:${CONVERT_FLV_TO_MP4:-false} 原版追加:${ENABLE_APPEND_RAW_VIDEO:-false}"
 log info "追加模式: 按月分稿件 月映射: ${APPEND_MONTHLY_MAP_FILE:-/rec/data/append_month_vid.map}"
 log info "保留天数: ${RETENTION_DAYS:-3} 天"
+log info "上传后立即删除: ${DELETE_AFTER_UPLOAD:-false}"
 
 # 加载按月追加映射（不存在则视为空，本次新建后会写回）
 monthly_map_load
@@ -292,6 +293,7 @@ TOTAL_RCLONE_FAIL=0          # 网盘备份失败数
 TOTAL_RCLONE_XML_OK=0        # webdav弹幕xml上传成功数
 TOTAL_RCLONE_XML_FAIL=0      # webdav弹幕xml上传失败数
 TOTAL_DELETED_DIRS=0         # 清理删除的目录数
+TOTAL_DELETED_AFTER_UPLOAD=0 # 上传后立即删除的文件数
 APPEND_SUCCEEDED=()          # 本次运行追加成功的视频（用于配对xml上传）
 
 # 检查 source_folders 中的文件夹是否存在，不存在则创建,防止脚本报错
@@ -505,6 +507,15 @@ else
     original_files=()
     audio_files=()
     append_files=()
+    session_pressed_files=()
+
+    # 本场录播的上传/备份状态（用于 DELETE_AFTER_UPLOAD）
+    immediate_delete_attempted=false
+    immediate_delete_ok=true
+    append_fail_before=$TOTAL_APPEND_FAIL
+    xml_fail_before=$TOTAL_RCLONE_XML_FAIL
+    danmu_version_cache_dir=""
+    target_dir=""
 
     # 处理从临时目录获取的文件路径
     mapfile -d '' -t input_files < <(find "$cache_dir" -type f -print0 | sort -z)
@@ -566,6 +577,7 @@ else
       if [[ ${#append_files[@]} -eq 0 ]]; then
         log info "无可追加的原版视频，跳过追加"
       else
+        immediate_delete_attempted=true
         # ---------- 按月分稿件追加（整目录按首文件月份归组） ----------
         mapfile -t sorted_append < <(printf '%s\n' "${append_files[@]}" | sort)
         # 月份只看本目录首文件：首文件是9月，整组录播就归9月
@@ -631,6 +643,14 @@ else
           fi
         fi
       fi
+    fi
+
+    # 追加或弹幕 XML 上传失败时，不做上传后立即删除
+    if [[ $TOTAL_APPEND_FAIL -gt $append_fail_before ]]; then
+      immediate_delete_ok=false
+    fi
+    if [[ $TOTAL_RCLONE_XML_FAIL -gt $xml_fail_before ]]; then
+      immediate_delete_ok=false
     fi
 
     for video_file in "${input_files[@]}"; do
@@ -758,6 +778,7 @@ else
         log warn "没有需要投稿的文件（未压制视频已追加到指定稿件），跳过新投稿"
         danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
       else
+        immediate_delete_attempted=true
         log info "开始上传视频 —— ${upload_files_count} 个文件，总计 $(format_size $upload_total_size)"
         for f in "${compressed_files[@]}"; do
           fs=$(stat -c%s "$f" 2>/dev/null || echo 0)
@@ -806,6 +827,7 @@ else
           log error "投稿失败（耗时:${UPLOAD_ELAPSED}s），状态记入日志，文件仍按固定落点备份，请检查"
           # 固定落点：投稿失败也不改目录，保证在线切片/语音识别路径稳定
           danmu_version_cache_dir="${source_backup}/videos/${streamer_name}/压制版/${formatted_start_time_3}/"
+          immediate_delete_ok=false
           ((TOTAL_UPLOAD_FAIL++))
         fi
       fi
@@ -813,6 +835,11 @@ else
       # =============================
       # 备份压制版
       # =============================
+      session_pressed_files=()
+      for f in "${cache_dir}/投稿版-"* "${cache_dir}/预览版-"*; do
+        [[ -f "$f" ]] && session_pressed_files+=("$f")
+      done
+
       if compgen -G "${cache_dir}/投稿版-*" > /dev/null; then
         log info "找到投稿版文件，准备备份"
 
@@ -982,6 +1009,69 @@ else
         fi
       fi
     fi
+
+    # =============================
+    # 上传后立即删除（不保留）
+    # =============================
+    if [[ "${DELETE_AFTER_UPLOAD:-false}" == "true" ]]; then
+      if [[ "${ENABLE_ASR_SUBMIT:-false}" == "true" ]]; then
+        log warn "已启用语音识别提交，跳过上传后立即删除（避免删除识别所需文件）"
+      elif [[ "$immediate_delete_attempted" != "true" ]]; then
+        log info "本场录播未执行 B站投稿/追加，跳过立即删除"
+      elif [[ "$immediate_delete_ok" != "true" ]]; then
+        log warn "本场录播存在 B站投稿/追加失败，保留本地文件以便重试"
+      else
+        log info "B站投稿/追加全部成功，立即删除本场录播的本地文件（不保留）"
+        deleted_files=0
+
+        # 删除压制版（投稿版/预览版）
+        for f in "${session_pressed_files[@]}"; do
+          [[ -z "$f" ]] && continue
+          for del_file in \
+            "${danmu_version_cache_dir:+${danmu_version_cache_dir%/}/$(basename "$f")}" \
+            "${cache_dir}/$(basename "$f")"; do
+            [[ -z "$del_file" || ! -f "$del_file" ]] && continue
+            del_size=$(stat -c%s "$del_file" 2>/dev/null || echo 0)
+            rm -f -- "$del_file"
+            log info "立即删除文件: $del_file (大小:$(format_size "${del_size:-0}"))"
+            ((deleted_files++))
+          done
+        done
+
+        # 删除原文件（视频/弹幕/提取的音频）
+        if [[ -n "$target_dir" ]]; then
+          for f in "${input_files[@]}"; do
+            [[ -z "$f" ]] && continue
+            base_name="$(basename "$f")"
+            for del_file in \
+              "${target_dir%/}/${base_name}" \
+              "${target_dir%/}/${base_name%.*}.m4a"; do
+              [[ -f "$del_file" ]] || continue
+              del_size=$(stat -c%s "$del_file" 2>/dev/null || echo 0)
+              rm -f -- "$del_file"
+              log info "立即删除文件: $del_file (大小:$(format_size "${del_size:-0}"))"
+              ((deleted_files++))
+            done
+          done
+        fi
+
+        # 删除本场缓存目录（含压制中间文件）
+        if [[ -d "$cache_dir" ]]; then
+          cache_files=$(find "$cache_dir" -type f 2>/dev/null | wc -l)
+          cache_size=$(du -sb "$cache_dir" 2>/dev/null | cut -f1)
+          rm -rf --one-file-system -- "$cache_dir"
+          deleted_files=$((deleted_files + cache_files))
+          log info "立即删除缓存目录: $cache_dir (文件:${cache_files} 大小:$(format_size "${cache_size:-0}"))"
+        fi
+
+        TOTAL_DELETED_AFTER_UPLOAD=$((TOTAL_DELETED_AFTER_UPLOAD + deleted_files))
+        log info "立即删除完成：共 ${deleted_files} 个文件"
+
+        # 清理空的日期/分类目录
+        find "${source_backup}/videos" -type d -empty -delete 2>/dev/null || true
+        find "${source_backup}/正在处理中" -type d -empty -delete 2>/dev/null || true
+      fi
+    fi
   done
 fi
 
@@ -1073,5 +1163,6 @@ log info "  追加投稿: 成功 ${TOTAL_APPEND_OK} / 失败 ${TOTAL_APPEND_FAIL
 log info "  网盘备份: 成功 ${TOTAL_RCLONE_OK} / 失败 ${TOTAL_RCLONE_FAIL}"
 log info "  webdav弹幕: 成功 ${TOTAL_RCLONE_XML_OK} / 失败 ${TOTAL_RCLONE_XML_FAIL}"
 log info "  旧视频清理: ${TOTAL_DELETED_DIRS} 个目录"
+log info "  上传后立即删除: ${TOTAL_DELETED_AFTER_UPLOAD} 个文件"
 log info "═══════════════════════════════════════════════"
 log info "脚本执行完毕"

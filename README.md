@@ -130,6 +130,7 @@ services:
 | `ENABLE_RCLONE_UPLOAD` | `false` | 启用 rclone 网盘备份 |
 | `ENABLE_CLEANUP` | `false` | 启用自动清理旧视频 |
 | `RETENTION_DAYS` | `3` | 视频保留天数 |
+| `DELETE_AFTER_UPLOAD` | `false` | B 站投稿/追加成功后立即删除本场本地视频 |
 | `ENABLE_AUDIO_EXTRACT` | `false` | 提取视频音频 |
 | `ENABLE_ASR_SUBMIT` | `false` | 提交音频到语音识别后端 |
 
@@ -175,7 +176,7 @@ SESSDATA=xxx;DedeUserID=xxx;DedeUserID__ckMd5=xxx
 4. **B 站投稿** — 自动选择封面（弹幕密度最高时刻）、生成描述，调用 `biliup` 上传
 5. **音频提取** — 提取原始视频音频（支持提交到外部语音识别服务）
 6. **网盘备份** — 通过 `rclone` 自动选择剩余容量最大的 OneDrive 网盘进行备份
-7. **自动清理** — 按自然日删除过期视频（带数量保护，默认最多删 8 个目录）
+7. **自动清理** — 按自然日删除过期视频（带数量保护，默认最多删 8 个目录）；可选用 `DELETE_AFTER_UPLOAD` 在投稿成功后立即删除本场本地文件
 8. **自动更新 cookies** — 定期刷新 B 站 cookies
 
 核心脚本：
