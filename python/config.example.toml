@@ -1,0 +1,203 @@
+# ============================================================
+# khx-live Python 版配置（通用多主播）
+#
+# 设计：
+#   - [danmaku] / [encode] / [upload] / [archive] 是全局默认值；
+#   - 每个 [[streamers]] 可以只写差异字段，没写的继承全局默认；
+#   - 新增主播只需要在文件末尾追加一段 [[streamers]]。
+#
+# 所有路径按“容器内挂载点 /rec”编写；宿主机运行时改成绝对路径。
+# ============================================================
+
+[general]
+# 服务器名称，只用于日志标识
+server_name = "pve-1-nas-1"
+
+# 处理中的缓存目录；实际路径为 <work_dir>/<主播归档名>/<开播时间>/
+work_dir = "/rec/正在处理中"
+
+# 归档根目录；实际路径为 <videos_dir>/<主播归档名>/压制版|原文件/YYYY/MM/YYYY-MM-DD/
+videos_dir = "/rec/videos"
+
+# 任务状态（JSON）和运行锁存放目录
+data_dir = "/rec/data/khx"
+
+# 日志目录
+log_dir = "/rec/logs/khx"
+
+
+[watch]
+# 监控的录制源目录，可以写多个
+source_folders = ["/rec/录播姬/video"]
+
+# 轮询间隔（秒）
+poll_seconds = 300
+
+# 目录里所有文件超过这么多分钟没有写入，就判定为“已下播”，可以开始处理
+idle_minutes = 20
+
+
+# ============================================================
+# 全局默认参数（每个主播都可以用同名子表覆盖）
+# ============================================================
+
+[danmaku]
+# 是否把弹幕烧进画面（关闭时只做 FLV->MP4 封装后投稿原片）
+enabled = true
+
+# DanmakuFactory 可执行文件
+factory = "/rec/apps/DanmakuFactory"
+
+# ASS 弹幕样式：字号和不透明度（0-255，255 为完全不透明）
+font_size = 50
+opacity = 200
+
+# 视频时长与最后一条弹幕时间的最大允许差值（秒）
+# 超过就认为录制/弹幕不同步，跳过压制，避免投出音画错位的视频。
+max_diff_seconds = 25
+
+
+[encode]
+# x264 质量参数：CRF 越小画质越好、体积越大
+crf = 21
+
+# x264 预设：veryfast 在 8 核机器上大约 2~2.5 倍速
+preset = "veryfast"
+
+# H.264 profile
+profile = "high"
+
+# 编码线程数，0 表示交给 ffmpeg 自动决定
+threads = 0
+
+# 是否优先尝试 Intel QSV 硬件编码；失败（无核显/驱动）会自动回退 CPU
+try_qsv = true
+qsv_quality = 20
+qsv_preset = "medium"
+
+
+[upload]
+# 是否投稿到 B 站（单个主播可用 [streamers.upload] 覆盖）
+enabled = true
+
+# biliup 可执行文件
+biliup = "/rec/biliup/biliup"
+
+# 投稿账号 cookies；不同主播可以用不同账号
+cookies = "/rec/cookies/bilibili/cookies-默认账号.json"
+
+# 分区、版权（1=自制 2=转载）
+tid = 17
+copyright = 2
+
+# 标签，逗号拼接后传给 biliup
+tags = ["直播回放"]
+
+# 标题模板，可用 {date}（2026年11月13日）、{title}（直播标题）、{streamer}
+title_template = "{date} [{title}]"
+
+# 简介模板，可用占位符：
+#   {title} 直播标题   {streamer} 主播归档名   {platform} 录制平台
+#   {danmaku_count} 弹幕总数   {cover_time} 封面时间   {cover_p} 封面所在分P
+# 空行和缩进原样保留。
+desc_template = """录制平台：{platform}
+弹幕总数：{danmaku_count}
+封面时间：{cover_p}P {cover_time}"""
+
+
+[archive]
+# 是否按自然日清理旧录播
+cleanup_enabled = true
+
+# 保留天数（含当天）
+retention_days = 15
+
+# 单次清理最多删几个日期目录，防止配置写错一次删光
+max_delete_per_run = 8
+
+# 投稿成功后是否立即删除本地“压制版 + 原文件”
+# 默认 false：本地保留一份，确认 B 站稿件正常后再手动清理。
+delete_after_upload = false
+
+
+[recorder]
+# 录播姬全局配置文件；sync 命令会把 cookies 和各主播房间同步进去
+config_path = "/rec/录播姬/config.json"
+
+# 录播姬使用的 cookie JSON（和投稿账号无关）
+record_cookie_json = "/rec/cookies/bilibili/cookies-录播账号.json"
+
+
+[github]
+# 是否从私有仓库同步 cookies
+# 私有仓库需要 token；token 从环境变量 XCT258_GITHUB_TOKEN 或 token_file 读取。
+enabled = false
+repo = "xct258/Documentation"
+branch = "main"
+token_file = "/app/.github_token"
+
+# remote 是仓库内路径，local 是落盘路径
+sources = [
+  { remote = "b站cookies/cookies-b站-xct258-2.json", local = "/rec/cookies/bilibili/cookies-xct258-2.json" },
+  { remote = "b站cookies/cookies-b站-烦心事远离.json", local = "/rec/cookies/bilibili/cookies-烦心事远离.json" },
+]
+
+
+# ============================================================
+# 主播列表
+#
+# 匹配规则：
+#   1. 录制文件名里的主播名命中 aliases / name / id；
+#   2. 或者目录属于该主播的 source_folders，且只有一个主播声明了该目录。
+# 匹配不到时会跳过并提示在配置里补一段 [[streamers]]。
+# ============================================================
+
+[[streamers]]
+# 唯一标识，用于状态文件、日志、命令行参数
+id = "khx"
+# 归档目录名，会出现在 videos/<name>/... 和 work_dir/<name>/...
+name = "括弧笑bilibili"
+# 录播姬里的昵称（文件名最后一段），可以有多个
+aliases = ["高机动持盾军官"]
+enabled = true
+
+# 录播姬房间号；不填则不同步录制配置
+room_id = 1962720
+
+# 可选：只从这些目录收这个主播的录制（不填则用全局 [watch].source_folders）
+# source_folders = ["/rec/录播姬/video/高机动持盾军官"]
+
+# 该主播的投稿账号和稿件模板
+[streamers.upload]
+cookies = "/rec/cookies/bilibili/cookies-烦心事远离.json"
+source = "https://live.bilibili.com/1962720"
+tags = ["直播回放", "奶茶猪", "娱乐主播"]
+desc_template = """↑↑↑直播间地址↑↑↑
+录制平台：{platform}
+弹幕总数：{danmaku_count}
+封面时间：{cover_p}P {cover_time}
+
+使用录播姬和 biliup 录制上传，有问题请站内私信联系。
+
+项目地址：
+https://github.com/xct258/khx-live"""
+
+
+# ------------------------------------------------------------
+# 第二个主播示例：复制下面这段，取消注释并改字段即可。
+# ------------------------------------------------------------
+# [[streamers]]
+# id = "example"
+# name = "示例主播"
+# aliases = ["示例主播的直播间昵称"]
+# enabled = true
+# room_id = 123456
+#
+# [streamers.upload]
+# enabled = false          # 只录制归档、不投稿
+#
+# [streamers.encode]
+# crf = 20                 # 该主播单独使用更高的画质
+#
+# [streamers.archive]
+# retention_days = 30      # 该主播多保留几天
