@@ -670,6 +670,8 @@ def step_archive(
         work_dir.rmdir()
     except OSError:
         pass
+    # 顺手清理 work/<主播> 这类空目录，保留 work 根目录
+    _remove_empty_dirs(config.general.work_dir)
 
     return (
         f"归档：压制版 {len(pressed_moved)} 个，原文件 {len(raw_moved)} 个"

@@ -157,6 +157,7 @@ def upload(
             logger.info("biliup: %s", line)
 
     return_code = process.wait()
+    process.stdout.close()
     output = "\n".join(output_lines[-40:])
     ok = any(keyword in output for keyword in SUCCESS_KEYWORDS)
 

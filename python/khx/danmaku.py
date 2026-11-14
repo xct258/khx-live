@@ -246,6 +246,7 @@ def _run_encode(
             )
 
     return_code = process.wait()
+    process.stdout.close()
     if return_code != 0:
         tail = "\n".join(error_lines[-10:])
         logger.error("ffmpeg 退出码 %s：%s", return_code, tail or "无错误输出")
